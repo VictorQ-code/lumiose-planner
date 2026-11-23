@@ -5,5 +5,9 @@
   "compatibility_date": "2026-11-01",
   "assets": {
     "directory": "./"
-  }
+  },
+  // Dirección propia: Cloudflare crea el dominio (y su certificado) al publicar; victorquero.dev ya está en esta cuenta
+  "routes": [
+    { "pattern": "lumiose.victorquero.dev", "custom_domain": true }
+  ]
 }
