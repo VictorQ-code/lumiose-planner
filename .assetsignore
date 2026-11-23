@@ -1,11 +1,27 @@
-# Lo que no se publica en la web (Cloudflare Workers): solo sirve para generar los datos o mantener el proyecto
+# Lo que no se publica en la web (Cloudflare Workers): solo sirve para generar los datos o mantener el proyecto.
+# Excluye lo mismo que .gitignore, por si alguna vez se publica desde este PC en vez de desde GitHub.
 .git
 .gitignore
 .assetsignore
 wrangler.jsonc
+.env
+.venv
+__pycache__
+.claude
+.wrangler
 pipeline
 estilos
 *.md
 *.bat
 *.py
+*.pyc
 requirements.txt
+data/bronze
+data/silver
+data/stream
+data/gold/la-dreta-de-l-eixample
+data/gold/barcelona/vivo/manifest.json
+data/gold/barcelona/vivo/bicing.json
+data/gold/barcelona/vivo/trafico.json
+data/gold/barcelona/vivo/tiempo.json
+data/gold/barcelona/vivo/bus.json
