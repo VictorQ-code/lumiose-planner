@@ -1196,7 +1196,7 @@ css.textContent=`#vivo{position:fixed;right:16px;bottom:70px;width:285px;padding
   #vivo select{font-size:15px!important;padding:5px!important}
 }`;
 document.head.appendChild(css);
-const box=document.createElement('div'); box.id='vivo'; box.className='card'+(store.get('min',false)?' min':''); document.body.appendChild(box);
+const box=document.createElement('div'); box.id='vivo'; box.className='card'+(store.get('min',!!window.EMBED)?' min':'');   // incrustado: empieza plegado document.body.appendChild(box);
 box.addEventListener('change',e=>{ if(e.target.id==='wxSim'){ e.target.blur(); setWxSim(e.target.value); return; }
   const k=e.target.dataset&&e.target.dataset.k; if(!k) return; ON[k]=e.target.checked; store.set(k,ON[k]); K.dirty(); panel(); });
 const hoja=()=>getComputedStyle(K.LIVE_BTN||document.body).display!=='none'&&!!K.LIVE_BTN;   // ¿interfaz de teléfono?

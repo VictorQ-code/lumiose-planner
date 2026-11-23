@@ -24,6 +24,13 @@
   // En casa (este PC o la red local) se ve también el test de rendimiento; en la web pública, no
   window.LOCAL=/^(localhost|127\.|\[?::1\]?$|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(location.hostname)||location.protocol==='file:';
   if(window.MOVIL) d.classList.add('tactil');
+  // Incrustado en la pestaña del portfolio (iframe): sin enlace de vuelta, y la página de fuera puede cambiar el idioma
+  try{ window.EMBED=window.top!==window.self; }catch(e){ window.EMBED=true; }
+  if(window.EMBED) d.classList.add('embed');
+  window.addEventListener('message',function(e){
+    if(!/^https:\/\/(www\.)?victorquero\.dev$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(e.origin)) return;   // solo la web de Victor (y pruebas en casa)
+    if(e.data&&e.data.tipo==='lumiose-idioma') window.setLang(e.data.lang);
+  });
 })();
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -79,6 +86,8 @@
   #bLang{font-variant:small-caps;letter-spacing:.04em}
   #srcm{display:none}
   #marca{margin:2px 0 0;font-size:13px;color:var(--muted);letter-spacing:.02em} #marca b{font-weight:500;color:var(--ink)} #marca a{color:var(--muted)}
+  html.embed #marca{display:none}
+  #wheelHint{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);padding:8px 14px;font-size:15px;display:none;z-index:4;pointer-events:none}
   /* Tablet (táctil y pantalla grande): misma distribución que en el ordenador, con botones a la medida del dedo */
   html.tactil .tools button{min-height:42px;padding:6px 14px;font-size:16px}
   html.tactil select{font-size:16px;padding:6px}
@@ -114,7 +123,7 @@
 <canvas id="c"></canvas>
 <div id="labels"></div>
 <header class="card" id="hdr"><div class="top"><h1 id="title" data-en="Loading…">Cargando…</h1><button id="hdrTog" aria-expanded="false" data-en-label="Show details" aria-label="Mostrar detalles">▾</button></div>
-  <div class="hdr-body"><p id="marca"><b>Lumiose Planner</b> · <a href="https://victorquero.dev/proyectos/lumiose-planner/" data-en="by Victor Quero">de Victor Quero</a></p><p id="stats"></p><select id="go" style="display:none"></select><p id="help"></p><p id="srcm"></p></div></header>
+  <div class="hdr-body"><p id="marca"><b>Lumiose Planner</b> · <a href="https://victorquero.dev/proyectos/lumiose-planner/" target="_top" data-en="by Victor Quero">de Victor Quero</a></p><p id="stats"></p><select id="go" style="display:none"></select><p id="help"></p><p id="srcm"></p></div></header>
 <canvas id="mini" class="card" width="440" height="440"></canvas>
 <div class="tools" id="tools">
   <button id="bCity" aria-pressed="true" data-en-label="City" aria-label="Ciudad" title="Ciudad"><svg class="ico" viewBox="0 0 24 24"><path d="M3 21h18M5 21V10l4-3v14M9 21V4h6v17M15 21V9h4v12M11.5 8h1M11.5 11h1M11.5 14h1"/></svg><span class="lbl" data-en="City">Ciudad</span></button>
@@ -127,6 +136,7 @@
   <button id="bBench" data-en-label="Performance test" aria-label="Test de rendimiento"><svg class="ico" viewBox="0 0 24 24"><path d="M4 20a8 8 0 1 1 16 0M12 20l4-6"/></svg><span class="lbl" data-en="Performance test">Test de rendimiento</span></button>
 </div>
 <div id="warn" class="card"></div>
+<div id="wheelHint" class="card" data-en="Click the map to zoom with the wheel">Haz clic en el mapa para hacer zoom con la rueda</div>
 <div id="tip" class="card"></div>
 <div id="legend" class="card"></div>
 <div id="stream"></div>
@@ -1017,8 +1027,15 @@ canvas.addEventListener('pointerup',endTouch,true); canvas.addEventListener('poi
 
 /* Zoom suave hacia el cursor */
 let zoomGoal=null; const zoomNdc=new THREE.Vector2();
+// Incrustado en otra página: la rueda desplaza esa página hasta que se hace clic en el mapa (como los mapas incrustados)
+let wheelOn=!EMBED, hintT=0;
+if(EMBED){
+  canvas.addEventListener('pointerdown',()=>{ wheelOn=true; $('wheelHint').style.display='none'; },true);
+  document.documentElement.addEventListener('mouseleave',()=>{ wheelOn=false; });
+}
 window.addEventListener('wheel',e=>{
   if(e.target!==canvas||bench) return;
+  if(!wheelOn){ e.stopPropagation(); const h=$('wheelHint'); h.style.display='block'; clearTimeout(hintT); hintT=setTimeout(()=>h.style.display='none',1400); return; }   // sin preventDefault: se mueve la página de fuera
   e.preventDefault(); e.stopPropagation();
   const base=zoomGoal??cam.zoom;
   zoomGoal=THREE.MathUtils.clamp(base*Math.pow(0.9985,e.deltaY*(e.deltaMode===1?33:1)),controls.minZoom,controls.maxZoom);
