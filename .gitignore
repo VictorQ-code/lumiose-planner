@@ -1,0 +1,27 @@
+# --- Secretos y entorno local (nunca se suben) ---
+.env
+.venv/
+__pycache__/
+*.pyc
+.claude/
+.wrangler/
+
+# Notas internas de trabajo (rutas y apuntes de este PC)
+CONTEXTO_COMPLETO.md
+
+# Copias antiguas que ya no se usan
+pipeline/suelo_antes_semaforos.py
+visor/index_antes_semaforos.html
+
+# --- Datos: solo se sube lo que lee el visor (data/gold/barcelona) ---
+# Fuera: descargas originales (bronze), datos limpios (silver), el histórico del colector (stream)
+# y el estado en vivo que escribe vivo.py (en la web lo lee el navegador directamente de las fuentes)
+data/*
+!data/gold/
+data/gold/*
+!data/gold/barcelona/
+data/gold/barcelona/vivo/manifest.json
+data/gold/barcelona/vivo/bicing.json
+data/gold/barcelona/vivo/trafico.json
+data/gold/barcelona/vivo/tiempo.json
+data/gold/barcelona/vivo/bus.json

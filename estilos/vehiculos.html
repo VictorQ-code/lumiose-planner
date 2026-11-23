@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ciudad · Vehículos: coches y autobuses</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#3a2616;--muted:#6b5440;--card:rgba(243,232,208,.95);--line:rgba(58,38,22,.25)}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;font-family:"EB Garamond",Georgia,serif;color:var(--ink);
+    background:radial-gradient(130% 100% at 50% 30%,#5a4030 0%,#3b2a1e 55%,#24180f 100%)}
+  #c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+  #c:active{cursor:grabbing}
+  header{position:fixed;top:14px;left:16px;right:16px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;pointer-events:none}
+  header .t{pointer-events:auto;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:10px 14px;max-width:560px;box-shadow:0 4px 18px rgba(0,0,0,.35)}
+  h1{margin:0;font-family:"IM Fell English",serif;font-weight:400;font-size:22px}
+  header p{margin:3px 0 0;font-size:14px;color:var(--muted);line-height:1.35}
+  .tools{pointer-events:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  button{font:inherit;font-size:15px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:5px 12px;border-radius:3px;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.3)}
+  button:hover{transform:translateY(-1px)}
+  button[aria-pressed="true"]{background:var(--ink);color:#f3e8d0;border-color:var(--ink)}
+  #labels{position:fixed;inset:0;pointer-events:none}
+  .lbl{position:absolute;transform:translate(-50%,-100%);pointer-events:auto;cursor:pointer;white-space:nowrap;font-family:"IM Fell English",serif;font-style:italic;font-size:16px;color:#3a2616;background:rgba(243,232,208,.88);border:1px solid var(--line);border-radius:3px;padding:1px 7px}
+  .lbl b{font-style:normal;font-weight:400;color:#8a5a3a;margin-right:4px}
+  .lbl.sel{background:#3a2616;color:#f3e8d0}
+  .lbl.sel b{color:#e2c48c}
+  .lbl.hide{display:none}
+  #info{position:fixed;right:16px;bottom:16px;width:330px;max-width:calc(100% - 32px);background:var(--card);border:1px solid var(--line);border-radius:4px;padding:12px 16px;font-size:15px;line-height:1.4;box-shadow:0 4px 18px rgba(0,0,0,.35)}
+  #info h2{margin:0 0 6px;font-family:"IM Fell English",serif;font-weight:400;font-size:20px}
+  #info p{margin:0 0 6px;color:var(--muted)}
+  #info .k{color:var(--ink)}
+  #err{position:fixed;inset:0;display:none;place-items:center;text-align:center;padding:24px;color:#f3e8d0}
+  @media (max-width:720px){
+    header p{display:none}
+    #info{left:12px;right:12px;width:auto;padding:8px 12px;font-size:13px}
+    .lbl{font-size:13px}
+    button{font-size:14px;padding:5px 9px}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<header>
+  <div class="t">
+    <h1>Vehículos · coches y autobuses</h1>
+    <p>Cinco coches y cinco autobuses en el estilo de tinta sepia. Debajo de los coches, el utilitario repetido con la paleta de colores que se sortearía en la ciudad. Arrastra para girar y pulsa un nombre para acercarte.</p>
+  </div>
+  <div class="tools">
+    <button id="bCar">Coches</button>
+    <button id="bBus">Autobuses</button>
+    <button id="bAll" aria-pressed="true">Todo</button>
+    <button id="bRot" aria-pressed="false">Girar</button>
+  </div>
+</header>
+<aside id="info"></aside>
+<div id="err">No se ha podido cargar el motor 3D. Recarga la página.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
+<script>
+(function(){
+if(!window.THREE || !THREE.OrbitControls || !THREE.BufferGeometryUtils){ document.getElementById('err').style.display='grid'; return; }
+
+const INK=0x4b2e1a;
+const C={glass:0x9fb0ad, tire:0x4a3a2e, hub:0xcfc2a6, light:0xfbf3e1, rear:0xb8503c, gray:0xb9b2a3, dark:0x6a5a4c,
+         red:0xc25a46, blue:0x7f9bb0, green:0x95a77c, ochre:0xd9b46a, white:0xf3ead6, black:0x5b4c40, silver:0xc9c3b4,
+         yellow:0xe7c24f, teal:0x6f9c8c, cream:0xf1e3bf, wine:0xa9483a, lamp:0x86c070, charge:0x9cc28a};
+const LDIR=new THREE.Vector3(-0.35,0.8,0.55).normalize();
+
+/* ---------- Escena ---------- */
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+const scene=new THREE.Scene();
+const H=20;
+const cam=new THREE.OrthographicCamera(-H,H,H,-H,-500,1000);
+const DIR=new THREE.Vector3(1,0.85,1).normalize();
+const controls=new THREE.OrbitControls(cam,canvas);
+controls.enableDamping=true; controls.dampingFactor=0.08;
+controls.minPolarAngle=0.25; controls.maxPolarAngle=1.35; controls.minZoom=0.4; controls.maxZoom=12; controls.autoRotateSpeed=0.8;
+
+/* ---------- Shaders (mismos que la lámina "tinta sepia retocada") ---------- */
+const NOISE=`
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x),f.y);}
+`;
+const HATCH=`
+float hatch(vec2 uv,float ang,float w,float sp){
+  vec2 d=vec2(cos(ang),sin(ang));
+  float c=dot(uv,d)/sp + (noise(uv*2.3/sp*0.16)-0.5)*0.7;
+  float dist=abs(fract(c)-0.5);
+  float aa=fwidth(c)*0.9+0.001;
+  float wv=w*(0.75+0.5*noise(uv*0.9/sp*0.16+ang*7.0));
+  return 1.0-smoothstep(wv-aa,wv+aa,dist);
+}`;
+const hatchVS=`
+varying vec3 vN; varying vec3 vW;
+void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz; vN=normalize(mat3(modelMatrix)*normal);
+  gl_Position=projectionMatrix*viewMatrix*w; }`;
+const hatchFS=`
+uniform vec3 paper; uniform vec3 ink; uniform vec3 L; uniform float tint; uniform float sp; uniform float lw;
+uniform vec3 th; uniform float covMul;
+varying vec3 vN; varying vec3 vW;
+${NOISE}
+${HATCH}
+void main(){
+  vec3 n=normalize(vN); vec3 a=abs(n);
+  vec2 uv = a.y>max(a.x,a.z) ? vW.xz : (a.x>a.z ? vW.zy : vW.xy);
+  float diff=max(dot(n,normalize(L)),0.0);
+  float t=(0.22+0.78*diff)*tint;
+  float cov=0.0;
+  cov=max(cov,hatch(uv, 0.785,lw,sp)*smoothstep(th.x+0.04,th.x-0.04,t)*0.75);
+  cov=max(cov,hatch(uv,-0.785,lw,sp)*smoothstep(th.y+0.04,th.y-0.04,t));
+  cov=max(cov,hatch(uv, 0.10,lw*1.1,sp)*smoothstep(th.z+0.04,th.z-0.04,t));
+  float grain=0.94+0.06*noise(uv*40.0);
+  vec3 base=paper*grain*mix(0.80,1.0,smoothstep(0.2,0.9,t));
+  gl_FragColor=vec4(mix(base,ink,cov*covMul),1.0);
+}`;
+const shadowVS=`varying vec3 vW; void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz; gl_Position=projectionMatrix*viewMatrix*w; }`;
+const shadowFS=`
+uniform vec3 ink; uniform float sp; varying vec3 vW;
+${NOISE}
+${HATCH}
+void main(){ float h=hatch(vW.xz,-0.35,0.15,sp*0.9); gl_FragColor=vec4(ink,max(h*0.6,0.12)); }`;
+const outlineVS=`
+uniform float w;
+${NOISE}
+void main(){ float k=0.85+0.3*noise(position.xz*3.0+position.y*2.0); vec3 p=position+normal*w*k;
+  gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0); }`;
+const outlineFS=`uniform vec3 c; void main(){ gl_FragColor=vec4(c,1.0); }`;
+
+const SP=0.075;   // los vehículos son pequeños: trama más fina que en los edificios
+const mats={};
+function mat(hex,tint){ const k=hex+'_'+tint; if(mats[k]) return mats[k];
+  return mats[k]=new THREE.ShaderMaterial({uniforms:{paper:{value:new THREE.Color(hex)},ink:{value:new THREE.Color(INK)},L:{value:LDIR},
+    tint:{value:tint},sp:{value:SP},lw:{value:0.11},th:{value:new THREE.Vector3(0.60,0.40,0.24)},covMul:{value:0.75}},
+    vertexShader:hatchVS,fragmentShader:hatchFS,extensions:{derivatives:true}}); }
+const outMat=new THREE.ShaderMaterial({uniforms:{w:{value:0.035},c:{value:new THREE.Color(INK)}},vertexShader:outlineVS,fragmentShader:outlineFS,side:THREE.BackSide});
+const edgeMat=new THREE.LineBasicMaterial({color:INK,transparent:true,opacity:0.55});
+const shadowMat=new THREE.ShaderMaterial({uniforms:{ink:{value:new THREE.Color(INK)},sp:{value:0.16}},vertexShader:shadowVS,fragmentShader:shadowFS,
+  transparent:true,depthWrite:true,depthFunc:THREE.LessDepth,extensions:{derivatives:true}});
+
+/* ---------- Piezas ---------- */
+// x = largo (morro hacia +x), y = alto, z = ancho
+function prof(pts,w,z){ const s=new THREE.Shape(); s.moveTo(pts[0][0],pts[0][1]); for(let i=1;i<pts.length;i++) s.lineTo(pts[i][0],pts[i][1]); s.closePath();
+  const g=new THREE.ExtrudeGeometry(s,{depth:w,bevelEnabled:false}); g.translate(0,0,-w/2+(z||0)); return g; }
+function bx(x0,x1,y0,y1,w,z){ return new THREE.BoxGeometry(x1-x0,y1-y0,w).translate((x0+x1)/2,(y0+y1)/2,z||0); }
+function wheels(xs,r,tw,W){ const o=[];
+  for(const x of xs) for(const s of [-1,1]){ const z=s*(W/2-tw/2+0.03);
+    o.push([new THREE.CylinderGeometry(r,r,tw,16).rotateX(Math.PI/2).translate(x,r,z),C.tire,0.5]);
+    o.push([new THREE.CylinderGeometry(r*0.5,r*0.5,0.02,12).rotateX(Math.PI/2).translate(x,r,z+s*(tw/2+0.01)),C.hub,0.9]); }
+  return o; }
+const both=(f)=>[f(-1),f(1)];
+
+function hull(g){ let h=g.clone(); for(const a of Object.keys(h.attributes)) if(a!=='position') h.deleteAttribute(a);
+  h=THREE.BufferGeometryUtils.mergeVertices(h,1e-3); h.computeVertexNormals(); return h; }
+function posOnly(g){ let h=g.index?g.toNonIndexed():g.clone(); for(const a of Object.keys(h.attributes)) if(a!=='position') h.deleteAttribute(a); return h; }
+
+function build(parts){
+  const g=new THREE.Group(), flat=[];
+  for(const [geo,hex,tint] of parts){
+    g.add(new THREE.Mesh(geo,mat(hex,tint==null?1:tint)));
+    g.add(new THREE.Mesh(hull(geo),outMat));
+    g.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo,30),edgeMat));
+    flat.push(posOnly(geo));
+  }
+  // sombra proyectada: toda la pieza aplastada contra el suelo siguiendo la luz
+  const sg=THREE.BufferGeometryUtils.mergeBufferGeometries(flat), p=sg.attributes.position;
+  for(let i=0;i<p.count;i++){ const y=p.getY(i); p.setXYZ(i,p.getX(i)-LDIR.x*y/LDIR.y,0.015,p.getZ(i)-LDIR.z*y/LDIR.y); }
+  g.add(new THREE.Mesh(sg,shadowMat));
+  return g;
+}
+
+/* ---------- Coches ---------- */
+function lightsCar(xf,xr,yf,yr,W){ return [
+  ...both(s=>[bx(xf-0.03,xf+0.02,yf,yf+0.12,0.34,s*(W/2-0.3)),C.light,1]),
+  ...both(s=>[bx(xr-0.02,xr+0.03,yr,yr+0.14,0.3,s*(W/2-0.28)),C.rear,0.9])]; }
+
+function utilitario(col){ const W=1.74; return [
+  [prof([[-2,.32],[2,.32],[2,.8],[1.7,.95],[-2,.95]],W),col],
+  [prof([[-1.92,.95],[1.25,.95],[.35,1.45],[-1.72,1.45]],W-.1),C.glass,.55],
+  [bx(-1.76,.42,1.45,1.52,W-.06),col],
+  [bx(1.96,2.05,.3,.52,W-.08),C.gray],[bx(-2.05,-1.96,.3,.52,W-.08),C.gray],
+  ...lightsCar(2.0,-2.0,.68,.72,W), ...wheels([1.28,-1.28],.32,.22,W)]; }
+
+function berlina(col){ const W=1.8; return [
+  [prof([[-2.35,.3],[2.35,.3],[2.35,.72],[2.0,.88],[-2.3,.9],[-2.35,.8]],W),col],
+  [prof([[-1.55,.9],[1.05,.9],[.3,1.42],[-1.0,1.42]],W-.1),C.glass,.55],
+  [bx(-1.02,.32,1.42,1.48,W-.1),col],
+  [bx(2.3,2.4,.3,.5,W-.08),C.gray],[bx(-2.4,-2.3,.3,.5,W-.08),C.gray],
+  ...lightsCar(2.35,-2.35,.6,.68,W), ...wheels([1.45,-1.45],.33,.22,W)]; }
+
+function suv(col){ const W=1.9; return [
+  [prof([[-2.3,.42],[2.3,.42],[2.3,1.0],[1.95,1.1],[-2.3,1.1]],W),col],
+  [bx(-2.32,2.32,.3,.55,W+.02),C.dark,.7],                                   // faldón protector
+  [prof([[-2.2,1.1],[1.4,1.1],[.75,1.72],[-2.12,1.72]],W-.1),C.glass,.55],
+  [bx(-2.14,.8,1.72,1.8,W-.08),col],
+  ...both(s=>[bx(-1.9,.5,1.8,1.86,.06,s*.72),C.black,.7]),                  // barras de techo
+  ...lightsCar(2.3,-2.3,.82,.85,W), ...wheels([1.4,-1.4],.4,.28,W)]; }
+
+function taxi(){ const W=1.8; return [
+  ...berlina(C.black).slice(0,3),
+  [bx(-1.25,1.0,.36,.89,W+.03),C.yellow],                                   // puertas amarillas
+  [bx(2.3,2.4,.3,.5,W-.08),C.gray],[bx(-2.4,-2.3,.3,.5,W-.08),C.gray],
+  [bx(-.5,.1,1.48,1.66,.5),C.cream],                                         // módulo de techo
+  [bx(-.25,-.1,1.66,1.76,.14),C.lamp,1.2],                                   // luz verde: libre
+  ...lightsCar(2.35,-2.35,.6,.68,W), ...wheels([1.45,-1.45],.33,.22,W)]; }
+
+function furgoneta(col){ const W=2.0; return [
+  [bx(-2.55,2.55,.35,1.1,W),col],
+  [bx(-2.55,1.25,1.1,2.5,W),col],
+  [bx(-2.4,1.1,1.45,1.75,W+.03),C.ochre],                                    // franja de la empresa
+  [prof([[1.25,1.1],[2.5,1.1],[1.85,2.05],[1.25,2.05]],W-.12),C.glass,.55],
+  [bx(1.25,1.88,2.05,2.15,W-.06),col],
+  [bx(2.5,2.6,.3,.55,W-.08),C.gray],[bx(-2.62,-2.55,.3,.55,W-.08),C.gray],
+  ...lightsCar(2.55,-2.55,.85,.9,W), ...wheels([1.75,-1.75],.36,.25,W)]; }
+
+/* ---------- Autobuses ---------- */
+// carrocería: faldón de color, banda de cristal hundida, techo de color y montantes cada ~1,7 m
+function bodyBus(x0,x1,col,o){ o=Object.assign({W:2.55,belt:1.15,top:2.6,H:3.0,front:true,rear:true,doors:[]},o);
+  const {W,belt,top,H}=o, P=[
+    [bx(x0,x1,.35,belt,W),col],
+    [bx(x0+(o.rear?.06:0),x1-(o.front?.06:0),belt,top,W-.08),C.glass,.55],
+    [bx(x0,x1,top,H,W),col]];
+  for(let x=x0+0.9;x<x1-0.9;x+=1.7) P.push([bx(x-.08,x+.08,belt,top,W-.03),col]);
+  for(const xd of o.doors) P.push([bx(xd-.6,xd+.6,.42,top-.05,.04,W/2+.01),C.glass,.42]);
+  if(o.front){ P.push([bx(x1-.02,x1+.02,top-.38,top-.06,W*.62),C.light,1.1]);       // letrero de destino
+               P.push([bx(x1-.04,x1+.1,.3,.6,W-.1),C.gray]);
+               P.push(...both(s=>[bx(x1-.02,x1+.03,.7,.84,.4,s*(W/2-.35)),C.light,1])); }
+  if(o.rear){ P.push([bx(x0-.1,x0+.04,.3,.6,W-.1),C.gray]);
+              P.push(...both(s=>[bx(x0-.03,x0+.02,.75,.95,.3,s*(W/2-.3)),C.rear,.9])); }
+  return P; }
+
+function estandar(){ return [
+  ...bodyBus(-6,6,C.red,{doors:[4.9,0.6,-3.6]}),
+  [bx(-1.2,2.6,3.0,3.32,1.8),C.gray],                                        // climatización
+  ...wheels([3.7,-2.7],.5,.3,2.55)]; }
+
+function articulado(){ const P=[
+  ...bodyBus(0.5,9,C.red,{rear:false,doors:[7.9,3.6]}),
+  ...bodyBus(-9,-0.5,C.red,{front:false,doors:[-2.4]}),
+  [bx(-1.0,1.8,3.0,3.3,1.8),C.gray]];
+  for(let i=0;i<7;i++){ const x=-0.5+i*(1.0/6); P.push([bx(x-.05,x+.05,.45,2.95,2.4-(i%2)*.08),i%2?C.dark:C.black,.6]); }   // fuelle
+  return [...P, ...wheels([7.4,1.6,-7.0],.5,.3,2.55)]; }
+
+function barrio(){ const W=2.35; return [
+  ...bodyBus(-4,4,C.white,{W,belt:1.05,top:2.45,H:2.85,doors:[3.0,-0.6]}),
+  [bx(-4,4,.9,1.05,W+.02),C.red],                                            // franja roja
+  [bx(-4,4,2.6,2.85,W+.02),C.red],
+  ...wheels([2.7,-2.5],.42,.26,W)]; }
+
+function turistico(){ const W=2.55, P=[
+  ...bodyBus(-5.5,5.5,C.wine,{top:2.25,H:2.55,doors:[4.5,-0.3]}),
+  [bx(-5.5,5.5,2.25,2.55,W+.02),C.cream],                                    // banda entre pisos
+  [bx(-5.5,5.5,2.55,2.7,W),C.wine],                                          // suelo del piso de arriba
+  ...both(s=>[bx(-5.5,5.38,2.7,3.55,.12,s*(W/2-.06)),C.wine]),               // barandillas laterales
+  [bx(-5.5,-5.36,2.7,3.55,W),C.wine],                                        // pared trasera
+  [bx(5.36,5.5,2.7,3.85,W),C.glass,.55],                                     // parabrisas de arriba
+  [bx(2.3,5.5,3.85,3.95,W),C.wine],                                          // techo delantero
+  ...both(s=>[bx(2.3,2.42,3.55,3.85,.1,s*(W/2-.08)),C.wine])];               // postes
+  for(let x=-4.8;x<4.8;x+=.85) for(const z of [-.62,.62]) P.push([bx(x-.22,x+.18,2.7,3.12,.85,z),C.cream,.85]);   // asientos
+  return [...P, ...wheels([3.6,-3.0],.5,.3,W)]; }
+
+function electrico(){ const W=2.55; return [
+  ...bodyBus(-6,6,C.teal,{doors:[4.9,0.6,-3.6]}),
+  [bx(-6,6,1.15,1.26,W+.02),C.charge],                                       // franja "cero emisiones"
+  [bx(-4.6,-0.6,3.0,3.36,2.0),C.gray],                                       // baterías
+  [bx(0.9,2.3,3.0,3.14,1.3),C.black,.7],                                     // base del pantógrafo
+  ...both(s=>[new THREE.BoxGeometry(1.5,.07,.07).rotateZ(.55).translate(1.3,3.5,s*.45),C.black,.7]),
+  [new THREE.CylinderGeometry(.05,.05,1.6,8).rotateX(Math.PI/2).translate(1.95,3.88,0),C.dark,.7],
+  ...wheels([3.7,-2.7],.5,.3,W)]; }
+
+/* ---------- Catálogo ---------- */
+const CARS=[
+  {name:'Utilitario',  f:()=>utilitario(C.red), len:4.0, d:'Compacto de cinco puertas. Es el coche más común: la mayor parte del tráfico de la ciudad.'},
+  {name:'Berlina',     f:()=>berlina(C.blue),   len:4.7, d:'Sedán de tres volúmenes, con maletero separado. Algo más largo y bajo.'},
+  {name:'SUV',         f:()=>suv(C.green),      len:4.6, d:'Más alto, ruedas grandes, faldón oscuro y barras de techo: se distingue desde lejos.'},
+  {name:'Taxi',        f:()=>taxi(),            len:4.7, d:'Negro con las puertas amarillas, como los de Barcelona. La luz verde del techo indica que va libre.'},
+  {name:'Furgoneta',   f:()=>furgoneta(C.white),len:5.1, d:'Reparto: caja alta y cabina corta. Útil para mostrar la logística de última milla.'}];
+const BUSES=[
+  {name:'Estándar 12 m', f:estandar,   len:12, d:'El autobús urbano habitual: tres puertas, climatización en el techo y banda de cristal corrida.'},
+  {name:'Articulado 18 m',f:articulado,len:18, d:'Dos cuerpos unidos por un fuelle. Para las líneas con más viajeros.'},
+  {name:'Bus de barrio', f:barrio,     len:8,  d:'Corto y estrecho, blanco con franjas rojas, para calles empinadas o estrechas.'},
+  {name:'Turístico',     f:turistico,  len:11, d:'Dos pisos con el de arriba descubierto: se ven las filas de asientos desde cualquier ángulo.'},
+  {name:'Eléctrico',     f:electrico,  len:12, d:'Baterías y pantógrafo de carga rápida en el techo, franja verde clara. Distinguible de los de combustión.'}];
+const PALETTE=[['rojo',C.red],['azul',C.blue],['verde',C.green],['ocre',C.ochre],['blanco',C.white],['negro',C.black],['plata',C.silver]];
+
+/* ---------- Suelo: papel, asfalto y plazas pintadas ---------- */
+function paperTex(){ const S=512, cv=document.createElement('canvas'); cv.width=cv.height=S; const x=cv.getContext('2d');
+  x.fillStyle='#efe1c2'; x.fillRect(0,0,S,S);
+  for(let i=0;i<6000;i++){ x.fillStyle='rgba(75,46,26,'+(Math.random()*0.05)+')'; x.fillRect(Math.random()*S,Math.random()*S,1.5,1.5); }
+  const t=new THREE.CanvasTexture(cv); t.wrapS=t.wrapT=THREE.RepeatWrapping; t.repeat.set(8,8); return t; }
+scene.add(new THREE.Mesh(new THREE.PlaneGeometry(400,400).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({map:paperTex()})));
+const asphalt=new THREE.MeshBasicMaterial({color:0xd6c9ab}), paint=new THREE.LineBasicMaterial({color:0xfbf6e8}), curb=new THREE.LineBasicMaterial({color:INK,transparent:true,opacity:.45});
+function lot(x0,x1,z0,z1,slots,axis){
+  scene.add(new THREE.Mesh(new THREE.PlaneGeometry(x1-x0,z1-z0).rotateX(-Math.PI/2).translate((x0+x1)/2,0.005,(z0+z1)/2),asphalt));
+  const e=[x0,.01,z0,x1,.01,z0, x1,.01,z0,x1,.01,z1, x1,.01,z1,x0,.01,z1, x0,.01,z1,x0,.01,z0];
+  const cg=new THREE.BufferGeometry(); cg.setAttribute('position',new THREE.Float32BufferAttribute(e,3)); scene.add(new THREE.LineSegments(cg,curb));
+  const l=[]; for(const s of slots){ if(axis==='x') l.push(s,.012,z0+.4,s,.012,z1-.4); else l.push(x0+.4,.012,s,x1-.4,.012,s); }
+  const lg=new THREE.BufferGeometry(); lg.setAttribute('position',new THREE.Float32BufferAttribute(l,3)); scene.add(new THREE.LineSegments(lg,paint)); }
+
+/* ---------- Colocación ---------- */
+const items=[], CAR_Z=-10, VAR_Z=-3.2, BUS_Z0=5, BUS_DZ=4.6;
+lot(-19,19,CAR_Z-3.6,CAR_Z+3.6,[-17.5,-10.5,-3.5,3.5,10.5,17.5],'x');
+CARS.forEach((v,i)=>{ const g=build(v.f()); g.rotation.y=Math.PI/2; g.position.set(-14+i*7,0,CAR_Z); scene.add(g);
+  items.push({...v,kind:'Coche',roman:['I','II','III','IV','V'][i],g,top:2.6}); });
+lot(-19,19,VAR_Z-2.4,VAR_Z+2.4,[],'x');
+PALETTE.forEach(([n,c],i)=>{ const g=build(utilitario(c)); g.rotation.y=Math.PI/2; g.scale.setScalar(0.8); g.position.set(-15+i*5,0,VAR_Z); scene.add(g); });
+lot(-11,11,BUS_Z0-2.3,BUS_Z0+4*BUS_DZ+2.3,[0,1,2,3].map(k=>BUS_Z0+BUS_DZ/2+k*BUS_DZ),'z');
+BUSES.forEach((v,i)=>{ const g=build(v.f()); g.position.set(0,0,BUS_Z0+i*BUS_DZ); scene.add(g);
+  items.push({...v,kind:'Autobús',roman:['I','II','III','IV','V'][i],g,top:i===3?4.4:3.8}); });
+
+/* ---------- Etiquetas e información ---------- */
+const labels=document.getElementById('labels'), info=document.getElementById('info');
+let sel=null, group='all';
+for(const it of items){ const d=document.createElement('div'); d.className='lbl'; d.innerHTML=`<b>${it.roman}</b>${it.name}`;
+  d.onclick=()=>focus(it); labels.appendChild(d); it.el=d; }
+function showInfo(it){
+  if(!it){ info.innerHTML=`<h2>Diez modelos</h2><p>Cinco coches y cinco autobuses. En la ciudad, cada coche sortearía modelo y color de la paleta (fila central), y cada línea de bus usaría el tipo que le toca.</p><p class="k">Todos están hechos con muy pocas piezas para poder dibujar miles a la vez.</p>`; return; }
+  info.innerHTML=`<h2>${it.kind} ${it.roman} · ${it.name}</h2><p>${it.d}</p><p class="k">Largo: ${it.len} m</p>`; }
+const tgt=new THREE.Vector3(), tmp=new THREE.Vector3(); let zoomTo=1, anim=false;
+function focus(it){ sel=it; items.forEach(o=>o.el.classList.toggle('sel',o===it));
+  it.g.getWorldPosition(tgt); tgt.y=1; zoomTo=it.kind==='Coche'?4.2:2.2; anim=true; showInfo(it); }
+function view(which){ group=which; sel=null; items.forEach(o=>o.el.classList.remove('sel'));
+  for(const [b,w] of [['bCar','car'],['bBus','bus'],['bAll','all']]) document.getElementById(b).setAttribute('aria-pressed',w===which);
+  if(which==='car'){ tgt.set(0,0,CAR_Z+3.5); zoomTo=1.6; } else if(which==='bus'){ tgt.set(0,0,BUS_Z0+2*BUS_DZ); zoomTo=1.55; } else { tgt.set(0,0,3); zoomTo=0.95; }
+  anim=true; showInfo(null); }
+document.getElementById('bCar').onclick=()=>view('car');
+document.getElementById('bBus').onclick=()=>view('bus');
+document.getElementById('bAll').onclick=()=>view('all');
+const bRot=document.getElementById('bRot');
+bRot.onclick=()=>{ controls.autoRotate=!controls.autoRotate; bRot.setAttribute('aria-pressed',controls.autoRotate); };
+controls.addEventListener('start',()=>{ anim=false; });
+
+/* ---------- Bucle ---------- */
+function resize(){ const w=innerWidth,h=innerHeight,a=w/h; cam.left=-H*a; cam.right=H*a; cam.top=H; cam.bottom=-H; cam.updateProjectionMatrix(); renderer.setSize(w,h,false); }
+addEventListener('resize',resize); resize();
+tgt.set(0,0,3); controls.target.copy(tgt); cam.position.copy(tgt).addScaledVector(DIR,200); cam.zoom=0.95; cam.updateProjectionMatrix();
+showInfo(null);
+function loop(){
+  requestAnimationFrame(loop);
+  if(anim){ const off=tmp.copy(cam.position).sub(controls.target);
+    controls.target.lerp(tgt,0.12); cam.position.copy(controls.target).add(off);
+    cam.zoom+= (zoomTo-cam.zoom)*0.12; cam.updateProjectionMatrix();
+    if(controls.target.distanceTo(tgt)<0.02&&Math.abs(cam.zoom-zoomTo)<0.005) anim=false; }
+  controls.update();
+  renderer.render(scene,cam);
+  const w=innerWidth,h=innerHeight;
+  for(const it of items){ it.g.getWorldPosition(tmp); tmp.y=it.top; tmp.project(cam);
+    const hidden=(group==='car'&&it.kind!=='Coche')||(group==='bus'&&it.kind!=='Autobús')||tmp.z>1;
+    it.el.classList.toggle('hide',hidden);
+    it.el.style.left=((tmp.x+1)/2*w)+'px'; it.el.style.top=((1-tmp.y)/2*h)+'px'; }
+}
+loop();
+})();
+</script>
+</body>
+</html>

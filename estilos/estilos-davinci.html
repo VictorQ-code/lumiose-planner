@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ciudad · Estilo boceto renacentista</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;1,400&family=IM+Fell+English:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#3a2616;--muted:#6b5440;--card:rgba(243,232,208,.93);--line:rgba(58,38,22,.25)}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;font-family:"EB Garamond",Georgia,serif;color:var(--ink);
+    background:radial-gradient(130% 100% at 50% 30%,#5a4030 0%,#3b2a1e 55%,#24180f 100%)}
+  #c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+  #c:active{cursor:grabbing}
+  header{position:fixed;top:14px;left:16px;right:16px;display:flex;justify-content:space-between;gap:12px;align-items:flex-start;pointer-events:none}
+  header .t{pointer-events:auto;background:var(--card);border:1px solid var(--line);border-radius:4px;padding:10px 14px;max-width:560px;
+    box-shadow:0 4px 18px rgba(0,0,0,.35)}
+  h1{margin:0;font-family:"IM Fell English",serif;font-weight:400;font-size:22px}
+  header p{margin:3px 0 0;font-size:14px;color:var(--muted);line-height:1.35}
+  .tools{pointer-events:auto;display:flex;gap:6px}
+  button{font:inherit;font-size:15px;border:1px solid var(--line);background:var(--card);color:var(--ink);padding:5px 12px;border-radius:3px;cursor:pointer;
+    box-shadow:0 2px 8px rgba(0,0,0,.3);transition:transform .12s}
+  button:hover{transform:translateY(-1px)}
+  button[aria-pressed="true"]{background:var(--ink);color:#f3e8d0;border-color:var(--ink)}
+  #labels{position:fixed;inset:0;pointer-events:none}
+  .lbl{position:absolute;transform:translate(-50%,0);pointer-events:auto;cursor:pointer;white-space:nowrap;font-family:"IM Fell English",serif;
+    font-style:italic;font-size:18px;color:#f3e8d0;text-shadow:0 1px 3px rgba(0,0,0,.6);padding:2px 8px;border-bottom:1px solid rgba(243,232,208,.5);transition:opacity .2s}
+  .lbl.sel{border-bottom-color:#f3e8d0;border-bottom-width:2px}
+  .lbl.dim{opacity:.4}
+  #bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:6px;flex-wrap:wrap;justify-content:center;max-width:calc(100% - 24px)}
+  #info{position:fixed;right:16px;bottom:62px;width:310px;max-width:calc(100% - 32px);background:var(--card);border:1px solid var(--line);border-radius:4px;
+    padding:12px 16px;font-size:15px;line-height:1.4;box-shadow:0 6px 24px rgba(0,0,0,.4)}
+  #info h2{margin:0 0 6px;font-family:"IM Fell English",serif;font-weight:400;font-size:20px}
+  #info p{margin:0 0 7px;color:var(--muted)}
+  #info .fit{color:var(--ink)}
+  #err{position:fixed;inset:0;display:none;place-items:center;text-align:center;padding:24px;color:#f3e8d0}
+  @media (max-width:720px){
+    header p{display:none}
+    #info{left:12px;right:12px;width:auto;bottom:auto;top:64px;padding:8px 12px;font-size:14px}
+    .lbl{font-size:15px}
+    button{font-size:14px;padding:5px 9px}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<header>
+  <div class="t">
+    <h1>Barcelona como un cuaderno de bocetos</h1>
+    <p>Tres variantes del estilo renacentista con la misma manzana. La trama de sombreado se calcula con la luz, y el tren va en color para que veas cómo destacarían los datos sobre el dibujo. Arrastra para girar y pulsa un nombre para acercarte.</p>
+  </div>
+  <div class="tools">
+    <button id="bAll">Ver todas</button>
+    <button id="bRot" aria-pressed="false">Girar</button>
+  </div>
+</header>
+<aside id="info"></aside>
+<nav id="bar"></nav>
+<div id="err">No se ha podido cargar el motor 3D. Recarga la página.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
+<script>
+(function(){
+if(!window.THREE || !THREE.OrbitControls){ document.getElementById('err').style.display='grid'; return; }
+
+/* ---------- Variantes ---------- */
+const VARS=[
+  { name:'Tinta sepia', roman:'I', paper:0xf0e2c4, ink:0x4b2e1a, hi:null, data:0xc8402a, sp:0.15, lw:0.10, outW:0.05,
+    sheet:'#efe1c2', sheetInk:'75,46,26',
+    desc:'Plumilla marrón sobre papel crema, con trama cruzada en las sombras. El cuaderno de un ingeniero del Renacimiento.',
+    fit:'Base clara y neutra: el tráfico, el metro y los datos en color destacan muchísimo.' },
+  { name:'Sanguina', roman:'II', paper:0xf4e4cf, ink:0x9a3a22, hi:null, data:0x1f6f8b, sp:0.19, lw:0.14, outW:0.06,
+    sheet:'#f3e2cb', sheetInk:'154,58,34',
+    desc:'Lápiz rojo sobre papel cálido, con un trazo más grueso y suave. Cálido y elegante.',
+    fit:'Ideal para la portada y la animación de la ciudad creciendo; los datos en azul contrastan bien.' },
+  { name:'Papel preparado', roman:'III', paper:0xb7bfb9, ink:0x2a2724, hi:0xfbf7ec, data:0xd9472b, sp:0.15, lw:0.10, outW:0.05,
+    sheet:'#b4bcb5', sheetInk:'42,39,36',
+    desc:'Papel tintado gris verdoso, tinta oscura en las sombras y realces en blanco en las caras iluminadas.',
+    fit:'El de más contraste: se lee bien de lejos y funciona en un modo noche.' }
+];
+const TINT={plinth:.78,street:.72,ground:1.0,grass:.9,wall:1.0,wall2:.86,band:1.0,roof:.68,tower:.95,glass:.42,accent:.8,
+            tree:.72,trunk:.5,metro:.6,rail:.5,dome:.92};
+const LDIR=new THREE.Vector3(0.5,0.8,0.32).normalize();
+
+/* ---------- Escena ---------- */
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+const scene=new THREE.Scene();
+const H=20;
+const cam=new THREE.OrthographicCamera(-H,H,H,-H,-500,1000);
+const DIR=new THREE.Vector3(1,0.85,1).normalize();
+const controls=new THREE.OrbitControls(cam,canvas);
+controls.enableDamping=true; controls.dampingFactor=0.08;
+controls.minPolarAngle=0.25; controls.maxPolarAngle=1.3; controls.minZoom=0.3; controls.maxZoom=8; controls.autoRotateSpeed=0.8;
+
+/* ---------- Shaders ---------- */
+const NOISE=`
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+vec2(1.,1.)),f.x),f.y);}
+`;
+const hatchVS=`
+varying vec3 vN; varying vec3 vW;
+void main(){ vec4 w=modelMatrix*vec4(position,1.0); vW=w.xyz; vN=normalize(mat3(modelMatrix)*normal);
+  gl_Position=projectionMatrix*viewMatrix*w; }`;
+const hatchFS=`
+uniform vec3 paper; uniform vec3 ink; uniform vec3 hi; uniform float useHi; uniform vec3 L; uniform float tint; uniform float sp; uniform float lw;
+varying vec3 vN; varying vec3 vW;
+${NOISE}
+float hatch(vec2 uv,float ang,float w){
+  vec2 d=vec2(cos(ang),sin(ang));
+  float c=dot(uv,d)/sp + (noise(uv*2.3)-0.5)*0.7;
+  float dist=abs(fract(c)-0.5);
+  float aa=fwidth(c)*0.9+0.001;
+  float wv=w*(0.75+0.5*noise(uv*0.9+ang*7.0));
+  return 1.0-smoothstep(wv-aa,wv+aa,dist);
+}
+void main(){
+  vec3 n=normalize(vN); vec3 a=abs(n);
+  vec2 uv = a.y>max(a.x,a.z) ? vW.xz : (a.x>a.z ? vW.zy : vW.xy);
+  float diff=max(dot(n,normalize(L)),0.0);
+  float t=(0.22+0.78*diff)*tint;
+  float cov=0.0;
+  cov=max(cov,hatch(uv, 0.785,lw)*smoothstep(0.82,0.74,t));
+  cov=max(cov,hatch(uv,-0.785,lw)*smoothstep(0.58,0.50,t));
+  cov=max(cov,hatch(uv, 0.10,lw*1.1)*smoothstep(0.38,0.30,t));
+  float grain=0.94+0.06*noise(uv*18.0);
+  vec3 col=mix(paper*grain,ink,cov*0.88);
+  if(useHi>0.5){ float h=hatch(uv,-0.6,lw*0.9)*smoothstep(0.80,0.90,t); col=mix(col,hi,h*0.9); }
+  gl_FragColor=vec4(col,1.0);
+}`;
+const outlineVS=`
+uniform float w;
+${NOISE}
+void main(){ float k=0.55+0.9*noise(position.xz*1.7+position.y*1.3); vec3 p=position+normal*w*k;
+  gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0); }`;
+const outlineFS=`uniform vec3 c; void main(){ gl_FragColor=vec4(c,1.0); }`;
+
+/* ---------- Geometría ---------- */
+function hullGeo(g){
+  let h=g.clone();
+  for(const a of Object.keys(h.attributes)) if(a!=='position') h.deleteAttribute(a);
+  h=THREE.BufferGeometryUtils.mergeVertices(h,1e-3); h.computeVertexNormals(); return h;
+}
+function box(w,h,d,x,y,z){ return new THREE.BoxGeometry(w,h,d).translate(x,y+h/2,z); }
+function cyl(r,h,x,y,z,seg){ return new THREE.CylinderGeometry(r,r,h,seg||12).translate(x,y+h/2,z); }
+function chamfer(s,c,path){
+  const h=s/2, sh=path?new THREE.Path():new THREE.Shape();
+  sh.moveTo(-h+c,-h); sh.lineTo(h-c,-h); sh.lineTo(h,-h+c); sh.lineTo(h,h-c);
+  sh.lineTo(h-c,h); sh.lineTo(-h+c,h); sh.lineTo(-h,h-c); sh.lineTo(-h,-h+c); sh.closePath(); return sh;
+}
+function extrudeUp(shape,depth,y0,x,z,scale){
+  const g=new THREE.ExtrudeGeometry(shape,{depth,bevelEnabled:false}); g.rotateX(-Math.PI/2);
+  if(scale) g.scale(scale,1,scale); g.translate(x,y0,z); return g;
+}
+function prismRoof(w,h,d,x,y,z){
+  const s=new THREE.Shape(); s.moveTo(-w/2,0); s.lineTo(w/2,0); s.lineTo(0,h); s.closePath();
+  const g=new THREE.ExtrudeGeometry(s,{depth:d,bevelEnabled:false}); g.translate(0,0,-d/2); g.translate(x,y,z); return g;
+}
+
+/* ---------- Hoja de papel con anotaciones ---------- */
+function sheetTexture(v,idx){
+  const S=1024, cv=document.createElement('canvas'); cv.width=cv.height=S; const x=cv.getContext('2d');
+  x.fillStyle=v.sheet; x.fillRect(0,0,S,S);
+  // grano y manchas
+  for(let i=0;i<9000;i++){ x.fillStyle='rgba('+v.sheetInk+','+(Math.random()*0.05)+')'; x.fillRect(Math.random()*S,Math.random()*S,1.5,1.5); }
+  for(let i=0;i<6;i++){ const cx=Math.random()*S, cy=Math.random()*S, r=60+Math.random()*180;
+    const g=x.createRadialGradient(cx,cy,r*0.2,cx,cy,r); g.addColorStop(0,'rgba(120,80,30,0.07)'); g.addColorStop(1,'rgba(120,80,30,0)');
+    x.fillStyle=g; x.beginPath(); x.arc(cx,cy,r,0,7); x.fill(); }
+  const vg=x.createRadialGradient(S/2,S/2,S*0.3,S/2,S/2,S*0.72); vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(90,55,20,0.22)');
+  x.fillStyle=vg; x.fillRect(0,0,S,S);
+  // líneas de construcción
+  x.strokeStyle='rgba('+v.sheetInk+',0.22)'; x.lineWidth=1.2;
+  x.beginPath(); x.arc(S*0.5,S*0.5,S*0.44,0,7); x.stroke();
+  x.beginPath(); x.arc(S*0.5,S*0.5,S*0.30,0,7); x.stroke();
+  x.beginPath(); x.moveTo(S*0.04,S*0.5); x.lineTo(S*0.96,S*0.5); x.moveTo(S*0.5,S*0.04); x.lineTo(S*0.5,S*0.96);
+  x.moveTo(S*0.12,S*0.12); x.lineTo(S*0.88,S*0.88); x.stroke();
+  // cotas
+  x.strokeStyle='rgba('+v.sheetInk+',0.45)'; x.lineWidth=1.5;
+  x.beginPath(); x.moveTo(S*0.08,S*0.93); x.lineTo(S*0.92,S*0.93);
+  for(const p of [0.08,0.92]){ x.moveTo(S*p,S*0.91); x.lineTo(S*p,S*0.95); } x.stroke();
+  // notas en escritura especular
+  x.save(); x.translate(S,0); x.scale(-1,1);
+  x.fillStyle='rgba('+v.sheetInk+',0.62)';
+  x.font='italic 38px "IM Fell English", Georgia, serif';
+  x.fillText('Studio della città · lamina '+v.roman, S*0.06, S*0.07);
+  x.font='italic 26px "IM Fell English", Georgia, serif';
+  const notes=['la manzana con chaflán de cuarenta y cinco grados','el tren recorre la ciudad por su orilla','la luz viene de poniente, la sombra se cruza en trama'];
+  notes.forEach((n,i)=>x.fillText(n, S*0.06, S*0.115+i*32));
+  x.font='italic 24px "IM Fell English", Georgia, serif';
+  x.fillText('braccia · xxx', S*0.44, S*0.975);
+  x.restore();
+  const t=new THREE.CanvasTexture(cv); t.anisotropy=4; return t;
+}
+
+/* ---------- Diorama ---------- */
+const R=6.3;
+function buildDiorama(v,idx){
+  const g=new THREE.Group();
+  const mats={}, outMat=new THREE.ShaderMaterial({uniforms:{c:{value:new THREE.Color(v.ink)},w:{value:v.outW}},vertexShader:outlineVS,fragmentShader:outlineFS,side:THREE.BackSide});
+  const edgeMat=new THREE.LineBasicMaterial({color:v.ink,transparent:true,opacity:0.55});
+  const dataMat=new THREE.MeshBasicMaterial({color:v.data});
+  function mat(key){
+    if(key==='train') return dataMat;
+    if(mats[key]) return mats[key];
+    return mats[key]=new THREE.ShaderMaterial({
+      uniforms:{paper:{value:new THREE.Color(v.paper)},ink:{value:new THREE.Color(v.ink)},hi:{value:new THREE.Color(v.hi||0xffffff)},
+        useHi:{value:v.hi?1:0},L:{value:LDIR},tint:{value:TINT[key]||1},sp:{value:v.sp},lw:{value:v.lw}},
+      vertexShader:hatchVS,fragmentShader:hatchFS,extensions:{derivatives:true}});
+  }
+  function add(geo,key,o,parent){
+    o=o||{}; parent=parent||g;
+    parent.add(new THREE.Mesh(geo,mat(key)));
+    if(o.outline!==false){
+      const m=new THREE.Mesh(hullGeo(geo), o.ow&&o.ow!==1 ? (()=>{const mm=outMat.clone(); mm.uniforms.w.value=v.outW*o.ow; mm.uniforms.c.value=new THREE.Color(key==='train'?v.data:v.ink).multiplyScalar(key==='train'?0.6:1); return mm;})() : outMat);
+      parent.add(m);
+    }
+    if(o.edges!==false) parent.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo,25),edgeMat));
+  }
+
+  // hoja de papel
+  const sheet=new THREE.Mesh(new THREE.PlaneGeometry(17.5,17.5),new THREE.MeshBasicMaterial({map:sheetTexture(v,idx)}));
+  sheet.rotation.x=-Math.PI/2; sheet.rotation.z=(idx-1)*0.035; sheet.position.y=-1.25; g.add(sheet);
+
+  add(box(14,1.2,14,0,-1.2,0),'plinth',{ow:1.2});
+  add(box(13.6,0.12,13.6,0,0,0),'street',{outline:false,edges:false});
+  [[-3,-3,5.4,'ground'],[3.1,-3.1,5.0,'ground'],[-3,3.1,5.4,'ground'],[3.1,3.1,5.0,'grass']]
+    .forEach(([x,z,s,k])=>add(box(s,0.18,s,x,0.12,z),k,{ow:0.5}));
+  add(box(2*R+0.5,0.06,0.5,0,0.12,-R),'rail',{outline:false});
+  add(box(2*R+0.5,0.06,0.5,0,0.12,R),'rail',{outline:false});
+  add(box(0.5,0.06,2*R-0.5,-R,0.12,0),'rail',{outline:false});
+  add(box(0.5,0.06,2*R-0.5,R,0.12,0),'rail',{outline:false});
+
+  // Eixample
+  const ex=-3,ez=-3,S=4.8,C=1.0;
+  const shp=()=>{const s=chamfer(S,C); s.holes.push(chamfer(2.2,0.45,true)); return s;};
+  add(extrudeUp(shp(),0.6,0.3,ex,ez),'wall2');
+  add(extrudeUp(shp(),2.4,0.9,ex,ez),'wall');
+  [1.5,2.1,2.7].forEach(y=>add(extrudeUp(shp(),0.07,y,ex,ez,1.035),'band',{ow:0.35,edges:false}));
+  add(extrudeUp(shp(),0.12,3.3,ex,ez,1.02),'roof',{ow:0.5});
+  add(box(0.5,0.35,0.5,ex-1.5,3.42,ez+0.2),'accent',{ow:0.5});
+  add(box(0.6,0.3,0.4,ex+1.4,3.42,ez-0.6),'roof',{ow:0.5});
+  add(cyl(0.6,0.12,ex,0.3,ez,10),'grass',{ow:0.4});
+
+  // Torre
+  const tx=3.1,tz=-3.1;
+  add(box(3.6,0.7,3.6,tx,0.3,tz),'wall2');
+  add(box(2.6,6.4,2.6,tx,1.0,tz),'tower');
+  for(let k=0;k<9;k++) add(box(2.68,0.26,2.68,tx,1.35+k*0.68,tz),'glass',{ow:0.35,edges:false});
+  add(box(1.8,1.0,1.8,tx,7.4,tz),'roof');
+  add(cyl(0.05,1.4,tx,8.4,tz,6),'accent',{ow:0.4});
+
+  // Casco antiguo
+  [[-4.85,1.4,2.0,2.2],[-3.35,1.4,2.6,2.2],[-4.4,1.6,1.6,4.6],[-2.8,1.3,1.9,4.6]].forEach(([x,w,h,z],i)=>{
+    add(box(w,h,1.8,x,0.3,z),i%2?'wall':'wall2');
+    add(prismRoof(w+0.2,0.7,2.0,x,0.3+h,z),'roof');
+    add(box(0.35,0.55,0.06,x,0.3,z+0.92),'accent',{ow:0.3,edges:false});
+  });
+  add(box(1.0,4.2,1.0,-1.35,0.3,2.3),'wall');
+  add(new THREE.ConeGeometry(0.8,1.4,4).rotateY(Math.PI/4).translate(-1.35,5.2,2.3),'roof');
+  add(box(0.9,0.45,0.6,-1.5,0.3,4.9),'metro');
+  add(cyl(0.05,1.0,-0.8,0.3,4.9,6),'rail',{ow:0.4});
+  add(box(0.34,0.34,0.06,-0.8,1.3,4.9),'metro',{ow:0.4});
+
+  // Parque
+  const prof=[new THREE.Vector2(0.001,0),new THREE.Vector2(1.0,0),new THREE.Vector2(1.0,3.4)];
+  for(let i=1;i<=8;i++){const a=i/8*Math.PI/2; prof.push(new THREE.Vector2(Math.max(0.001,Math.cos(a)),3.4+1.9*Math.sin(a)));}
+  add(new THREE.LatheGeometry(prof,20).translate(4.2,0.3,2.0),'dome');
+  [1.4,2.4].forEach(y=>add(cyl(1.04,0.18,4.2,0.3+y,2.0,20),'glass',{ow:0.3,edges:false}));
+  [[1.6,1.8],[2.1,3.6],[1.4,5.0],[3.0,4.9],[4.7,4.7],[4.5,3.7]].forEach(([x,z],i)=>{
+    add(cyl(0.1,0.5,x,0.3,z,6),'trunk',{ow:0.4});
+    add(new THREE.IcosahedronGeometry(0.5+(i%3)*0.08,0).translate(x,1.05,z),'tree',{ow:0.6});
+  });
+
+  // Tren (el "dato" en color)
+  const cars=[];
+  for(let i=0;i<3;i++){ const cg=new THREE.Group(); add(box(0.82,0.42,0.36,0,0.18,0),'train',{ow:0.5,edges:false},cg); g.add(cg); cars.push(cg); }
+  g.userData.cars=cars;
+  return g;
+}
+function onLoop(s){
+  const L=2*R,P=4*L; s=((s%P)+P)%P; const side=Math.floor(s/L), u=(s%L)-R;
+  if(side===0) return [u,-R,0]; if(side===1) return [R,u,-Math.PI/2]; if(side===2) return [-u,R,Math.PI]; return [-R,-u,Math.PI/2];
+}
+
+/* ---------- Disposición, encuadre, UI ---------- */
+let dioramas=[], labels=[], btns=[], selected=-1, tween=null, cols=3;
+const SP=19;
+function layout(){
+  cols=(innerWidth/innerHeight)<0.85?1:3; const rows=Math.ceil(VARS.length/cols);
+  dioramas.forEach((g,i)=>{const c=i%cols,r=Math.floor(i/cols); g.position.set((c-(cols-1)/2)*SP,0,(r-(rows-1)/2)*SP);});
+}
+const tR=new THREE.Vector3(), tU=new THREE.Vector3();
+function fitZoom(center,pts){
+  cam.updateMatrixWorld(); tR.set(1,0,0).applyQuaternion(cam.quaternion); tU.set(0,1,0).applyQuaternion(cam.quaternion);
+  let hw=0,hh=0; const q=new THREE.Vector3();
+  pts.forEach(p=>{q.copy(p).sub(center); hw=Math.max(hw,Math.abs(q.dot(tR))); hh=Math.max(hh,Math.abs(q.dot(tU)));});
+  const a=innerWidth/innerHeight, small=innerWidth<720;
+  return Math.min(H*a*(small?0.94:0.86)/hw, H*(small?0.6:0.7)/hh);
+}
+function corners(cx,cz,h){const o=[]; for(const x of[-h,h])for(const z of[-h,h])for(const y of[-1.2,9])o.push(new THREE.Vector3(cx+x,y,cz+z)); return o;}
+function overview(){const p=[]; dioramas.forEach(g=>p.push(...corners(g.position.x,g.position.z,8))); const c=new THREE.Vector3(0,2,0); return {target:c,zoom:fitZoom(c,p)};}
+function focus(i){const g=dioramas[i]; const c=new THREE.Vector3(g.position.x,2.5,g.position.z); return {target:c,zoom:fitZoom(c,corners(g.position.x,g.position.z,7.5))};}
+function flyTo(t){ tween={from:controls.target.clone(),fromZ:cam.zoom,to:t.target,toZ:t.zoom,t:0}; }
+
+const infoEl=document.getElementById('info');
+function renderInfo(){
+  if(selected<0){ infoEl.innerHTML='<h2>Tres láminas</h2><p>Las tres usan los mismos edificios; cambian el papel, la tinta y la trama del sombreado. El tren va en color porque así se verían los datos en vivo sobre la ciudad dibujada.</p><p class="fit">Dime cuál prefieres, o mezclas como «el papel del III con la tinta del I».</p>'; return; }
+  const v=VARS[selected];
+  infoEl.innerHTML='<h2>'+v.roman+' · '+v.name+'</h2><p>'+v.desc+'</p><p class="fit">'+v.fit+'</p>';
+}
+function select(i){
+  selected=i;
+  labels.forEach((l,j)=>{l.classList.toggle('sel',j===i); l.classList.toggle('dim',i>=0&&j!==i);});
+  btns.forEach((b,j)=>b.setAttribute('aria-pressed',String(j===i)));
+  renderInfo(); flyTo(i<0?overview():focus(i));
+}
+
+function init(){
+  dioramas=VARS.map((v,i)=>{const g=buildDiorama(v,i); g.userData.phase=i*4.2; scene.add(g); return g;});
+  const le=document.getElementById('labels'), be=document.getElementById('bar');
+  labels=VARS.map((v,i)=>{const d=document.createElement('div'); d.className='lbl'; d.textContent=v.roman+' · '+v.name; d.onclick=()=>select(i); le.appendChild(d); return d;});
+  btns=VARS.map((v,i)=>{const b=document.createElement('button'); b.textContent=v.roman+' · '+v.name; b.setAttribute('aria-pressed','false'); b.onclick=()=>select(i); be.appendChild(b); return b;});
+  document.getElementById('bAll').onclick=()=>select(-1);
+  const bRot=document.getElementById('bRot');
+  bRot.onclick=()=>{controls.autoRotate=!controls.autoRotate; bRot.setAttribute('aria-pressed',String(controls.autoRotate));};
+  window.addEventListener('keydown',e=>{const n=parseInt(e.key,10); if(n>=1&&n<=VARS.length) select(n-1); if(e.key==='0'||e.key==='Escape') select(-1);});
+  window.addEventListener('resize',resize);
+  layout();
+  controls.target.set(0,2,0); cam.position.copy(controls.target).addScaledVector(DIR,200); cam.lookAt(controls.target);
+  resize(); renderInfo(); tick();
+}
+function resize(){
+  const w=innerWidth,h=innerHeight,a=w/h; renderer.setSize(w,h,false);
+  cam.left=-H*a; cam.right=H*a; cam.top=H; cam.bottom=-H; cam.updateProjectionMatrix();
+  layout(); const t=selected<0?overview():focus(selected);
+  if(!tween){ controls.target.copy(t.target); cam.position.copy(t.target).addScaledVector(DIR,200); cam.zoom=t.zoom; cam.updateProjectionMatrix(); }
+  else flyTo(t);
+}
+const clock=new THREE.Clock(), pv=new THREE.Vector3(); let time=0;
+function tick(){
+  const dt=Math.min(clock.getDelta(),0.05); time+=dt;
+  if(tween){
+    tween.t=Math.min(1,tween.t+dt/0.85); const e=tween.t<.5?4*tween.t**3:1-Math.pow(-2*tween.t+2,3)/2;
+    const off=cam.position.clone().sub(controls.target);
+    controls.target.lerpVectors(tween.from,tween.to,e); cam.position.copy(controls.target).add(off);
+    cam.zoom=tween.fromZ+(tween.toZ-tween.fromZ)*e; cam.updateProjectionMatrix(); if(tween.t>=1) tween=null;
+  }
+  controls.update();
+  dioramas.forEach(g=>{const b=time*1.7+g.userData.phase; g.userData.cars.forEach((c,i)=>{const [x,z,r]=onLoop(b-i*0.95); c.position.set(x,0.12,z); c.rotation.y=r;});});
+  renderer.render(scene,cam);
+  const w=innerWidth,h=innerHeight;
+  dioramas.forEach((g,i)=>{ pv.set(g.position.x,-1.25,g.position.z+8.6); pv.project(cam);
+    const l=labels[i]; l.style.left=((pv.x+1)/2*w)+'px'; l.style.top=((1-pv.y)/2*h+4)+'px';
+    l.style.visibility=(Math.abs(pv.x)>1.1||Math.abs(pv.y)>1.1)?'hidden':'visible'; });
+  requestAnimationFrame(tick);
+}
+
+// Espera a la tipografía para que las notas de las hojas salgan con letra caligráfica
+let started=false; const go=()=>{ if(!started){ started=true; init(); } };
+if(document.fonts && document.fonts.load){
+  Promise.all([document.fonts.load('italic 38px "IM Fell English"'),document.fonts.load('italic 26px "IM Fell English"')]).then(go,go);
+  setTimeout(go,2500);
+} else go();
+})();
+</script>
+</body>
+</html>

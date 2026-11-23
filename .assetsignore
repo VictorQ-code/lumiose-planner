@@ -1,0 +1,11 @@
+# Lo que no se publica en la web (Cloudflare Workers): solo sirve para generar los datos o mantener el proyecto
+.git
+.gitignore
+.assetsignore
+wrangler.jsonc
+pipeline
+estilos
+*.md
+*.bat
+*.py
+requirements.txt

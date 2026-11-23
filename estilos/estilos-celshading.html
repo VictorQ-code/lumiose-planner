@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ciudad · Estilos cel-shading</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg1:#efebe4; --bg2:#dcd6cc; --ink:#1d1f24; --muted:#5d6068;
+    --card:rgba(255,255,255,.86); --line:rgba(29,31,36,.12); --acc:#e63946;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;font-family:"Space Grotesk",system-ui,sans-serif;color:var(--ink);
+    background:radial-gradient(120% 90% at 50% 35%,var(--bg1),var(--bg2));}
+  #c{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:grab}
+  #c:active{cursor:grabbing}
+  header{position:fixed;top:16px;left:18px;right:18px;pointer-events:none;display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+  header .t{pointer-events:auto}
+  h1{margin:0;font-size:20px;font-weight:700;letter-spacing:-.01em}
+  header p{margin:4px 0 0;font-size:13px;color:var(--muted);max-width:520px;line-height:1.4}
+  .tools{pointer-events:auto;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--card);color:var(--ink);
+    padding:7px 11px;border-radius:999px;cursor:pointer;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+    transition:transform .12s,background .15s,border-color .15s}
+  button:hover{transform:translateY(-1px);border-color:rgba(29,31,36,.3)}
+  button[aria-pressed="true"]{background:var(--ink);color:#fff;border-color:var(--ink)}
+  #labels{position:fixed;inset:0;pointer-events:none}
+  .lbl{position:absolute;transform:translate(-50%,0);pointer-events:auto;cursor:pointer;white-space:nowrap;
+    display:flex;align-items:center;gap:7px;font-size:13px;font-weight:500;padding:5px 11px 5px 5px;border-radius:999px;
+    background:var(--card);border:1px solid var(--line);box-shadow:0 2px 10px rgba(0,0,0,.08);transition:opacity .2s,background .15s}
+  .lbl b{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--ink);color:#fff;font-size:12px}
+  .lbl.sel{background:var(--ink);color:#fff}
+  .lbl.sel b{background:#fff;color:var(--ink)}
+  .lbl.dim{opacity:.35}
+  #bar{position:fixed;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:6px;flex-wrap:wrap;justify-content:center;
+    max-width:calc(100% - 24px)}
+  #info{position:fixed;right:18px;bottom:66px;width:300px;max-width:calc(100% - 36px);background:var(--card);border:1px solid var(--line);
+    border-radius:14px;padding:14px 16px;font-size:13px;line-height:1.45;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    box-shadow:0 6px 24px rgba(0,0,0,.08)}
+  #info h2{margin:0 0 6px;font-size:16px;display:flex;align-items:center;gap:8px}
+  #info h2 b{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;background:var(--ink);color:#fff;font-size:12px}
+  #info p{margin:0 0 8px;color:var(--muted)}
+  #info .k{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-top:4px}
+  #info .sw{display:flex;gap:4px;margin:6px 0 10px}
+  #info .sw i{width:22px;height:22px;border-radius:6px;border:1px solid rgba(0,0,0,.15)}
+  #info .fit{color:var(--ink);margin:0}
+  #err{position:fixed;inset:0;display:none;place-items:center;text-align:center;padding:24px;color:var(--muted)}
+  @media (max-width:720px){
+    header p{display:none}
+    #info{left:12px;right:12px;width:auto;bottom:auto;top:58px;padding:10px 12px}
+    #info .sw{display:none}
+    .lbl{font-size:11px;padding:3px 8px 3px 3px}
+    .lbl b{width:18px;height:18px;font-size:11px}
+    button{font-size:12px;padding:6px 9px}
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<header>
+  <div class="t">
+    <h1>Barcelona 3D · estilos cel-shading</h1>
+    <p>La misma manzana en seis estilos: un bloque del Eixample con chaflán, una torre de oficinas, casco antiguo con campanario, un parque y una línea de tren. Arrastra para girar, rueda o pellizco para zoom, y pulsa un nombre para acercarte.</p>
+  </div>
+  <div class="tools">
+    <button id="bAll">Ver todos</button>
+    <button id="bRot" aria-pressed="false">Girar</button>
+  </div>
+</header>
+<aside id="info"></aside>
+<nav id="bar"></nav>
+<div id="err">No se ha podido cargar el motor 3D. Recarga la página.</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/utils/BufferGeometryUtils.js"></script>
+<script>
+(function(){
+if(!window.THREE || !THREE.OrbitControls){ document.getElementById('err').style.display='grid'; return; }
+
+/* ---------- Estilos ---------- */
+const STYLES = [
+  { id:'comic', name:'Cómic clásico', bands:[90,170,255], outline:0x161616, outlineW:0.07, edges:0x161616,
+    desc:'Colores saturados, tres tonos de luz y contorno negro grueso. Muy legible y lo más parecido a un videojuego.',
+    fit:'Encaja con: capas de datos en colores vivos encima, sin que se pierdan.',
+    pal:{plinth:0x2e3440,street:0x4c566a,ground:0xe5dccb,grass:0x7cc36a,wall:0xf4d6a0,wall2:0xd9825b,band:0xfff4e0,roof:0xc8553d,
+         tower:0x8ecae6,glass:0x2a6f97,accent:0xffc93c,tree:0x4caf50,trunk:0x8d5a3b,metro:0xe63946,train:0xe63946,rail:0x3b4252,dome:0xf28482}},
+  { id:'pastel', name:'Pastel suave', bands:[150,255], outline:'tint', tintK:0.62, outlineW:0.045, edges:null,
+    desc:'Dos tonos y contorno del propio color oscurecido. Suave y amable, como una maqueta de cartulina.',
+    fit:'Encaja con: mapas de calor y datos en colores intensos que contrastan con la base.',
+    pal:{plinth:0xb8c0e0,street:0xc9cde3,ground:0xfdf3e7,grass:0xbfe3c0,wall:0xffd6e0,wall2:0xffc8a2,band:0xffffff,roof:0xf4a7b9,
+         tower:0xb5d8f7,glass:0x9bb8e8,accent:0xfff1a8,tree:0xa8dba8,trunk:0xd4a373,metro:0xff8fa3,train:0xa0c4ff,rail:0xa7aecf,dome:0xcdb4db}},
+  { id:'tinta', name:'Tinta y papel', bands:[175,255], outline:0x111111, outlineW:0.09, edges:0x111111,
+    desc:'Casi monocromo, línea negra marcada y solo el rojo como acento. Elegante, de ilustración.',
+    fit:'Encaja con: destacar solo lo importante; el dato es lo único con color.',
+    pal:{plinth:0x222222,street:0xd6d2c8,ground:0xf7f3ea,grass:0xe8e4d8,wall:0xfbf8f1,wall2:0xefe9dc,band:0xffffff,roof:0xd1495b,
+         tower:0xf3efe6,glass:0x2b2b2b,accent:0xd1495b,tree:0xeeeae0,trunk:0x333333,metro:0xd1495b,train:0xd1495b,rail:0x444444,dome:0xf1ece2}},
+  { id:'medit', name:'Mediterráneo', bands:[110,185,255], outline:'tint', tintK:0.45, outlineW:0.06, edges:null,
+    desc:'Terracotas, ocres y verdes con tres tonos de luz. Tiene identidad de Barcelona.',
+    fit:'Encaja con: escaparate visual y la animación del crecimiento de la ciudad.',
+    pal:{plinth:0x6b4f3a,street:0x8a7f72,ground:0xf0e0c0,grass:0x9bbf6a,wall:0xf2c879,wall2:0xd98b5f,band:0xfff0d6,roof:0xc0603a,
+         tower:0xe9d8b4,glass:0x3f7f9e,accent:0x2f9e8f,tree:0x6c9a3d,trunk:0x7a5230,metro:0xc0392b,train:0xf2b134,rail:0x5a4636,dome:0x5fa8a0}},
+  { id:'neon', name:'Neón nocturno', bands:[60,120,200], outline:0x22d3ee, outlineW:0.045, edges:null,
+    glow:['glass','band','accent','train','metro'],
+    desc:'Ciudad oscura con ventanas, vías y trenes que brillan. Lo más espectacular para datos en vivo.',
+    fit:'Encaja con: tráfico, trenes y metro en tiempo real, y un modo noche.',
+    pal:{plinth:0x0b1026,street:0x141a3a,ground:0x1c2247,grass:0x123a3a,wall:0x2a2f5c,wall2:0x3b2a5c,band:0xff4fd8,roof:0x1f2550,
+         tower:0x232a5e,glass:0x22d3ee,accent:0xfde047,tree:0x0f766e,trunk:0x1e293b,metro:0xff2d55,train:0xff4fd8,rail:0x2b3470,dome:0x312e81}},
+  { id:'plano', name:'Plano técnico', bands:[170,255], outline:null, outlineW:0, edges:0xe0f2ff, opacity:0.78,
+    glow:['accent','train','metro'], grid:true,
+    desc:'Volúmenes azules translúcidos con aristas blancas. Aspecto de gemelo digital y de ingeniería.',
+    fit:'Encaja con: el modo rayos X del subsuelo y las vistas de análisis.',
+    pal:{plinth:0x0d3b66,street:0x14508a,ground:0x1d5fa0,grass:0x1d6fa0,wall:0x4a90d9,wall2:0x3a7bc8,band:0x8fc5ff,roof:0x2f6db5,
+         tower:0x5aa0e6,glass:0xa8d8ff,accent:0xffd166,tree:0x3fa7d6,trunk:0x2a6fb0,metro:0xffd166,train:0xffd166,rail:0x0a2f52,dome:0x6fb3f0}}
+];
+const NOFADE=['plinth','street','rail'];
+
+/* ---------- Escena ---------- */
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFShadowMap;
+const scene=new THREE.Scene();
+
+const H=20;
+const cam=new THREE.OrthographicCamera(-H,H,H,-H,-500,1000);
+const DIR=new THREE.Vector3(1,0.85,1).normalize();
+cam.position.copy(DIR).multiplyScalar(200);
+const controls=new THREE.OrbitControls(cam,canvas);
+controls.enableDamping=true; controls.dampingFactor=0.08;
+controls.minPolarAngle=0.25; controls.maxPolarAngle=1.3;
+controls.minZoom=0.3; controls.maxZoom=8; controls.autoRotateSpeed=0.8;
+
+scene.add(new THREE.AmbientLight(0xffffff,0.45));
+const sun=new THREE.DirectionalLight(0xffffff,0.85);
+sun.position.set(30,60,22); sun.castShadow=true;
+sun.shadow.mapSize.set(2048,2048);
+Object.assign(sun.shadow.camera,{left:-50,right:50,top:50,bottom:-50,near:1,far:200});
+sun.shadow.bias=-0.0008;
+scene.add(sun);
+
+/* ---------- Utilidades ---------- */
+const gradCache={};
+function gradTex(bands){
+  const k=bands.join(','); if(gradCache[k]) return gradCache[k];
+  const d=new Uint8Array(bands.length*4);
+  bands.forEach((v,i)=>{d[i*4]=d[i*4+1]=d[i*4+2]=v;d[i*4+3]=255;});
+  const t=new THREE.DataTexture(d,bands.length,1,THREE.RGBAFormat);
+  t.minFilter=t.magFilter=THREE.NearestFilter; t.generateMipmaps=false; t.needsUpdate=true;
+  return gradCache[k]=t;
+}
+const outlineCache={};
+function outlineMat(color,w){
+  const key=color.getHexString()+'_'+w.toFixed(4);
+  if(outlineCache[key]) return outlineCache[key];
+  return outlineCache[key]=new THREE.ShaderMaterial({
+    uniforms:{c:{value:color.clone()},w:{value:w}},
+    vertexShader:'uniform float w; void main(){ vec3 p=position+normal*w; gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0); }',
+    fragmentShader:'uniform vec3 c; void main(){ gl_FragColor=vec4(c,1.0); }',
+    side:THREE.BackSide
+  });
+}
+function hullGeo(g){
+  let h=g.clone();
+  for(const a of Object.keys(h.attributes)) if(a!=='position') h.deleteAttribute(a);
+  h=THREE.BufferGeometryUtils.mergeVertices(h,1e-3);
+  h.computeVertexNormals();
+  return h;
+}
+function box(w,h,d,x,y,z){ return new THREE.BoxGeometry(w,h,d).translate(x,y+h/2,z); }
+function cyl(r,h,x,y,z,seg){ return new THREE.CylinderGeometry(r,r,h,seg||12).translate(x,y+h/2,z); }
+function chamfer(s,c,path){
+  const h=s/2, sh=path?new THREE.Path():new THREE.Shape();
+  sh.moveTo(-h+c,-h); sh.lineTo(h-c,-h); sh.lineTo(h,-h+c); sh.lineTo(h,h-c);
+  sh.lineTo(h-c,h); sh.lineTo(-h+c,h); sh.lineTo(-h,h-c); sh.lineTo(-h,-h+c); sh.closePath();
+  return sh;
+}
+function extrudeUp(shape,depth,y0,x,z,scale){
+  const g=new THREE.ExtrudeGeometry(shape,{depth,bevelEnabled:false});
+  g.rotateX(-Math.PI/2);
+  if(scale) g.scale(scale,1,scale);
+  g.translate(x,y0,z);
+  return g;
+}
+function prismRoof(w,h,d,x,y,z){
+  const s=new THREE.Shape(); s.moveTo(-w/2,0); s.lineTo(w/2,0); s.lineTo(0,h); s.closePath();
+  const g=new THREE.ExtrudeGeometry(s,{depth:d,bevelEnabled:false});
+  g.translate(0,0,-d/2); g.translate(x,y,z); return g;
+}
+
+/* ---------- Diorama ---------- */
+const R=6.3; // radio del circuito del tren
+function buildDiorama(st){
+  const g=new THREE.Group(); const P=st.pal; const grad=gradTex(st.bands);
+  const mats={};
+  const edgeMat=st.edges!=null?new THREE.LineBasicMaterial({color:st.edges}):null;
+  function mat(key){
+    if(mats[key]) return mats[key];
+    let m;
+    if(st.glow && st.glow.includes(key)) m=new THREE.MeshBasicMaterial({color:P[key]});
+    else{
+      const fade=st.opacity && !NOFADE.includes(key);
+      m=new THREE.MeshToonMaterial({color:P[key],gradientMap:grad,transparent:!!fade,opacity:fade?st.opacity:1});
+    }
+    return mats[key]=m;
+  }
+  function add(geo,key,o,parent){
+    o=o||{}; parent=parent||g;
+    const m=new THREE.Mesh(geo,mat(key));
+    m.castShadow=o.cast!==false; m.receiveShadow=true; parent.add(m);
+    const w=(o.ow==null?1:o.ow)*st.outlineW;
+    if(o.outline!==false && st.outline!=null && w>0){
+      const oc= st.outline==='tint' ? new THREE.Color(P[key]).multiplyScalar(st.tintK) : new THREE.Color(st.outline);
+      const hm=new THREE.Mesh(hullGeo(geo),outlineMat(oc,w)); hm.castShadow=false; parent.add(hm);
+    }
+    if(edgeMat && o.edges!==false) parent.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo,25),edgeMat));
+    return m;
+  }
+
+  // Zócalo y calles
+  add(box(14,1.2,14,0,-1.2,0),'plinth',{ow:1.3});
+  add(box(13.6,0.12,13.6,0,0,0),'street',{outline:false,edges:false,cast:false});
+  if(st.grid){ const gh=new THREE.GridHelper(13.6,17,0x8fc5ff,0x3f78b8); gh.position.y=0.125; g.add(gh); }
+  const lots=[[-3,-3,5.4,'ground'],[3.1,-3.1,5.0,'ground'],[-3,3.1,5.4,'ground'],[3.1,3.1,5.0,'grass']];
+  lots.forEach(([x,z,s,k])=>add(box(s,0.18,s,x,0.12,z),k,{ow:0.5,cast:false}));
+  for(let i=-5.2;i<=5.4;i+=1.3){
+    add(box(0.5,0.02,0.09,i,0.12,0.15),'accent',{outline:false,edges:false,cast:false});
+    add(box(0.09,0.02,0.5,0.15,0.12,i),'accent',{outline:false,edges:false,cast:false});
+  }
+  // Vía perimetral
+  add(box(2*R+0.5,0.06,0.5,0,0.12,-R),'rail',{outline:false,cast:false});
+  add(box(2*R+0.5,0.06,0.5,0,0.12,R),'rail',{outline:false,cast:false});
+  add(box(0.5,0.06,2*R-0.5,-R,0.12,0),'rail',{outline:false,cast:false});
+  add(box(0.5,0.06,2*R-0.5,R,0.12,0),'rail',{outline:false,cast:false});
+
+  // A) Manzana del Eixample con chaflanes y patio interior
+  const ex=-3,ez=-3,S=4.8,C=1.0;
+  const shp=()=>{const s=chamfer(S,C); s.holes.push(chamfer(2.2,0.45,true)); return s;};
+  add(extrudeUp(shp(),0.6,0.3,ex,ez),'wall2');
+  add(extrudeUp(shp(),2.4,0.9,ex,ez),'wall');
+  [1.5,2.1,2.7].forEach(y=>add(extrudeUp(shp(),0.07,y,ex,ez,1.035),'band',{ow:0.35,edges:false}));
+  add(extrudeUp(shp(),0.12,3.3,ex,ez,1.02),'roof',{ow:0.5});
+  add(box(0.5,0.35,0.5,ex-1.5,3.42,ez+0.2),'accent',{ow:0.5});
+  add(box(0.6,0.3,0.4,ex+1.4,3.42,ez-0.6),'roof',{ow:0.5});
+  add(cyl(0.6,0.12,ex,0.3,ez,10),'grass',{ow:0.4});
+
+  // B) Torre de oficinas
+  const tx=3.1,tz=-3.1;
+  add(box(3.6,0.7,3.6,tx,0.3,tz),'wall2');
+  add(box(2.6,6.4,2.6,tx,1.0,tz),'tower');
+  for(let k=0;k<9;k++) add(box(2.68,0.26,2.68,tx,1.35+k*0.68,tz),'glass',{ow:0.35,edges:false});
+  add(box(1.8,1.0,1.8,tx,7.4,tz),'roof');
+  add(cyl(0.05,1.4,tx,8.4,tz,6),'accent',{ow:0.4});
+
+  // C) Casco antiguo con campanario y boca de metro
+  const houses=[[-4.85,1.4,2.0,2.2],[-3.35,1.4,2.6,2.2],[-4.4,1.6,1.6,4.6],[-2.8,1.3,1.9,4.6]];
+  houses.forEach(([x,w,h,z],i)=>{
+    add(box(w,h,1.8,x,0.3,z),i%2?'wall':'wall2');
+    add(prismRoof(w+0.2,0.7,2.0,x,0.3+h,z),'roof');
+    add(box(0.35,0.55,0.06,x,0.3,z+0.92),'accent',{ow:0.3,edges:false});
+  });
+  add(box(1.0,4.2,1.0,-1.35,0.3,2.3),'wall');
+  add(new THREE.ConeGeometry(0.8,1.4,4).rotateY(Math.PI/4).translate(-1.35,0.3+4.2+0.7,2.3),'roof');
+  add(box(0.9,0.45,0.6,-1.5,0.3,4.9),'metro');
+  add(cyl(0.05,1.0,-0.8,0.3,4.9,6),'rail',{ow:0.4});
+  add(box(0.34,0.34,0.06,-0.8,1.3,4.9),'metro',{ow:0.4});
+
+  // D) Parque con torre redondeada
+  const prof=[]; prof.push(new THREE.Vector2(0.001,0)); prof.push(new THREE.Vector2(1.0,0)); prof.push(new THREE.Vector2(1.0,3.4));
+  for(let i=1;i<=8;i++){const a=i/8*Math.PI/2; prof.push(new THREE.Vector2(Math.max(0.001,1.0*Math.cos(a)),3.4+1.9*Math.sin(a)));}
+  add(new THREE.LatheGeometry(prof,20).translate(4.2,0.3,2.0),'dome');
+  [1.4,2.4].forEach(y=>add(cyl(1.04,0.18,4.2,0.3+y,2.0,20),'glass',{ow:0.3,edges:false}));
+  [[1.6,1.8],[2.1,3.6],[1.4,5.0],[3.0,4.9],[4.7,4.7],[4.5,3.7]].forEach(([x,z],i)=>{
+    add(cyl(0.1,0.5,x,0.3,z,6),'trunk',{ow:0.4});
+    add(new THREE.IcosahedronGeometry(0.5+(i%3)*0.08,0).translate(x,1.05,z),'tree',{ow:0.6});
+  });
+
+  // Tren de tres coches
+  const cars=[];
+  for(let i=0;i<3;i++){
+    const cg=new THREE.Group();
+    add(box(0.82,0.4,0.36,0,0.18,0),'train',{ow:0.5},cg);
+    add(box(0.84,0.1,0.38,0,0.42,0),'glass',{ow:0.3,edges:false},cg);
+    g.add(cg); cars.push(cg);
+  }
+  g.userData.cars=cars;
+  return g;
+}
+
+function onLoop(s){
+  const L=2*R, P=4*L; s=((s%P)+P)%P; const side=Math.floor(s/L), u=(s%L)-R;
+  if(side===0) return [u,-R,0];
+  if(side===1) return [R,u,-Math.PI/2];
+  if(side===2) return [-u,R,Math.PI];
+  return [-R,-u,Math.PI/2];
+}
+
+const dioramas=STYLES.map((st,i)=>{ const g=buildDiorama(st); g.userData.phase=i*3.1; scene.add(g); return g; });
+
+/* ---------- Disposición ---------- */
+const SP=18; let cols=3;
+function layout(){
+  cols = (innerWidth/innerHeight)<0.85 ? 2 : 3;
+  const rows=Math.ceil(STYLES.length/cols);
+  dioramas.forEach((g,i)=>{
+    const c=i%cols, r=Math.floor(i/cols);
+    g.position.set((c-(cols-1)/2)*SP,0,(r-(rows-1)/2)*SP);
+  });
+}
+
+/* ---------- Encuadre ---------- */
+const tmpR=new THREE.Vector3(), tmpU=new THREE.Vector3();
+function fitZoom(center,pts){
+  cam.updateMatrixWorld();
+  tmpR.set(1,0,0).applyQuaternion(cam.quaternion);
+  tmpU.set(0,1,0).applyQuaternion(cam.quaternion);
+  let hw=0,hh=0; const v=new THREE.Vector3();
+  pts.forEach(p=>{ v.copy(p).sub(center); hw=Math.max(hw,Math.abs(v.dot(tmpR))); hh=Math.max(hh,Math.abs(v.dot(tmpU))); });
+  const aspect=innerWidth/innerHeight;
+  const small=innerWidth<720;
+  const fx=small?0.94:0.86, fy=small?0.62:0.72;
+  return Math.min(H*aspect*fx/hw, H*fy/hh);
+}
+function cornersOf(cx,cz,half){
+  const out=[];
+  for(const x of [-half,half]) for(const z of [-half,half]) for(const y of [-1.2,9]) out.push(new THREE.Vector3(cx+x,y,cz+z));
+  return out;
+}
+function overviewTarget(){
+  const pts=[]; dioramas.forEach(g=>pts.push(...cornersOf(g.position.x,g.position.z,7)));
+  const c=new THREE.Vector3(0,2,0);
+  return {target:c, zoom:fitZoom(c,pts)};
+}
+function focusTarget(i){
+  const g=dioramas[i]; const c=new THREE.Vector3(g.position.x,2.5,g.position.z);
+  return {target:c, zoom:fitZoom(c,cornersOf(g.position.x,g.position.z,7))};
+}
+
+let tween=null;
+function flyTo(t){
+  tween={from:controls.target.clone(), fromZ:cam.zoom, to:t.target, toZ:t.zoom, t:0};
+}
+
+/* ---------- UI ---------- */
+let selected=-1;
+const labelsEl=document.getElementById('labels'), barEl=document.getElementById('bar'), infoEl=document.getElementById('info');
+const hex=n=>'#'+n.toString(16).padStart(6,'0');
+const labels=STYLES.map((st,i)=>{
+  const d=document.createElement('div'); d.className='lbl'; d.innerHTML='<b>'+(i+1)+'</b>'+st.name;
+  d.onclick=()=>select(i); labelsEl.appendChild(d); return d;
+});
+const btns=STYLES.map((st,i)=>{
+  const b=document.createElement('button'); b.textContent=(i+1)+' · '+st.name; b.setAttribute('aria-pressed','false');
+  b.onclick=()=>select(i); barEl.appendChild(b); return b;
+});
+function renderInfo(){
+  if(selected<0){
+    infoEl.innerHTML='<h2>Elige un estilo</h2><p>Los seis dioramas usan los mismos edificios; solo cambia el sombreado, el contorno y la paleta. Pulsa un número para verlo de cerca.</p><p class="fit">Cuando lo tengas, dime el número (o una mezcla, por ejemplo «la paleta del 4 con el contorno del 1»).</p>';
+    return;
+  }
+  const st=STYLES[selected];
+  const sw=['wall','wall2','roof','tower','glass','tree','accent','plinth'].map(k=>'<i style="background:'+hex(st.pal[k])+'"></i>').join('');
+  const ol= st.outline==null?'sin contorno, solo aristas':(st.outline==='tint'?'del color de cada pieza, oscurecido':'de color fijo '+hex(st.outline));
+  infoEl.innerHTML='<h2><b>'+(selected+1)+'</b>'+st.name+'</h2><p>'+st.desc+'</p>'+
+    '<div class="k">Paleta</div><div class="sw">'+sw+'</div>'+
+    '<p><span class="k">Luz</span> '+st.bands.length+' tonos · <span class="k">Contorno</span> '+ol+(st.edges!=null&&st.outline!=null?' + aristas interiores':'')+'</p>'+
+    '<p class="fit">'+st.fit+'</p>';
+}
+function select(i){
+  selected=i;
+  labels.forEach((l,j)=>{l.classList.toggle('sel',j===i); l.classList.toggle('dim',i>=0&&j!==i);});
+  btns.forEach((b,j)=>b.setAttribute('aria-pressed',String(j===i)));
+  renderInfo();
+  flyTo(i<0?overviewTarget():focusTarget(i));
+}
+document.getElementById('bAll').onclick=()=>select(-1);
+const bRot=document.getElementById('bRot');
+bRot.onclick=()=>{controls.autoRotate=!controls.autoRotate; bRot.setAttribute('aria-pressed',String(controls.autoRotate));};
+window.addEventListener('keydown',e=>{
+  const n=parseInt(e.key,10); if(n>=1&&n<=STYLES.length) select(n-1);
+  if(e.key==='0'||e.key==='Escape') select(-1);
+});
+
+/* ---------- Tamaño ---------- */
+function resize(){
+  const w=innerWidth,h=innerHeight,a=w/h;
+  renderer.setSize(w,h,false);
+  cam.left=-H*a; cam.right=H*a; cam.top=H; cam.bottom=-H; cam.updateProjectionMatrix();
+  const prevCols=cols; layout();
+  const t= selected<0?overviewTarget():focusTarget(selected);
+  if(!tween){ controls.target.copy(t.target); cam.position.copy(t.target).addScaledVector(DIR,200); cam.zoom=t.zoom; cam.updateProjectionMatrix(); }
+  else flyTo(t);
+}
+window.addEventListener('resize',resize);
+layout();
+controls.target.set(0,2,0); cam.position.copy(controls.target).addScaledVector(DIR,200); cam.lookAt(controls.target);
+resize();
+renderInfo();
+
+/* ---------- Bucle ---------- */
+const clock=new THREE.Clock(); const v=new THREE.Vector3(); let time=0;
+function tick(){
+  const dt=Math.min(clock.getDelta(),0.05); time+=dt;
+  if(tween){
+    tween.t=Math.min(1,tween.t+dt/0.85);
+    const e=tween.t<.5?4*tween.t**3:1-Math.pow(-2*tween.t+2,3)/2;
+    const off=cam.position.clone().sub(controls.target);
+    controls.target.lerpVectors(tween.from,tween.to,e);
+    cam.position.copy(controls.target).add(off);
+    cam.zoom=tween.fromZ+(tween.toZ-tween.fromZ)*e; cam.updateProjectionMatrix();
+    if(tween.t>=1) tween=null;
+  }
+  controls.update();
+  dioramas.forEach(g=>{
+    const base=time*1.7+g.userData.phase;
+    g.userData.cars.forEach((c,i)=>{ const [x,z,r]=onLoop(base-i*0.95); c.position.set(x,0.12,z); c.rotation.y=r; });
+  });
+  renderer.render(scene,cam);
+  const w=innerWidth,h=innerHeight;
+  dioramas.forEach((g,i)=>{
+    v.set(g.position.x,-1.2,g.position.z+7.2); v.project(cam);
+    const l=labels[i]; l.style.left=((v.x+1)/2*w)+'px'; l.style.top=((1-v.y)/2*h+6)+'px';
+    l.style.visibility=(v.x<-1.1||v.x>1.1||v.y<-1.1||v.y>1.1)?'hidden':'visible';
+  });
+  requestAnimationFrame(tick);
+}
+tick();
+})();
+</script>
+</body>
+</html>

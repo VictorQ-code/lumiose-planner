@@ -1,0 +1,9 @@
+// Publicación en Cloudflare Workers (solo archivos estáticos, sin código de servidor):
+// lo que hay en el repositorio menos lo que lista .assetsignore. Cada push a main lo vuelve a publicar.
+{
+  "name": "lumiose-planner",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./"
+  }
+}
