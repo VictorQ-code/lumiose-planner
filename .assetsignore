@@ -11,6 +11,8 @@ __pycache__
 .wrangler
 pipeline
 estilos
+worker
+.github
 *.md
 *.bat
 *.py

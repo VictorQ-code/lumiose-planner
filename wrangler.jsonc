@@ -1,11 +1,21 @@
-// Publicación en Cloudflare Workers (solo archivos estáticos, sin código de servidor):
-// lo que hay en el repositorio menos lo que lista .assetsignore. Cada push a main lo vuelve a publicar.
+// Publicación en Cloudflare Workers. Cada push a main lo vuelve a publicar (Workers Builds).
+// - Archivos estáticos: lo que hay en el repositorio menos lo que lista .assetsignore (la web y los datos de la ciudad).
+// - worker/index.js: solo atiende /api/* y, cada minuto, captura los datos en vivo en R2 (el histórico).
+// - Secretos (no van aquí): TMB_APP_ID y TMB_APP_KEY, con `npx wrangler secret put` (los escribe Victor, nadie más los ve).
 {
   "name": "lumiose-planner",
+  "main": "worker/index.js",
   "compatibility_date": "2026-11-01",
   "assets": {
-    "directory": "./"
+    "directory": "./",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
   },
+  "triggers": { "crons": ["* * * * *"] },
+  "r2_buckets": [
+    { "binding": "DATOS", "bucket_name": "lumiose-datos" }
+  ],
+  "observability": { "enabled": true },
   // Dirección propia: Cloudflare crea el dominio (y su certificado) al publicar; victorquero.dev ya está en esta cuenta
   "routes": [
     { "pattern": "lumiose.victorquero.dev", "custom_domain": true }

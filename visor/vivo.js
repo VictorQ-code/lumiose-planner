@@ -233,7 +233,7 @@ function stopForLight(x,z,ang,front,v,dec,look,lat){ if(!RED) return -1;
 const STOPLINE=4;
 const estado=e=>(TRAF&&e.t>=0&&TRAF.get(e.t))||0;
 const lanesDir=e=>e.one?e.lanes:Math.max(1,e.lanes>>1);
-const hourF=()=>HOUR[new Date().getHours()];
+const hourF=()=>HOUR[horaBcn()];
 const dens=e=>DENS[e.cls]*lanesDir(e)*TRAF_D[estado(e)]*hourF()*(e.one?1:2);
 const speed=e=>e.v*TRAF_V[estado(e)];
 function luz(node,g){ const t=(performance.now()/1000+RED.off[node])%CYCLE, ph=g?(t+CYCLE/2)%CYCLE:t; return ph<GREEN?0:ph<GREEN+AMBER?1:2; }   // 0 verde, 1 ámbar, 2 rojo
@@ -424,10 +424,18 @@ let busBusy=new Map(), nBusLight=0, nBusJunc=0, nCycLight=0;
 let BUS=null, busState='none', busActive=[], busLastScan=0, nBusAll=0, BUSDELAY=null, BUSDELAY_INFO=null;
 const MAXD=900;   // retraso máximo que se aplica (±15 min)
 const delayOf=name=>{ const d=BUSDELAY&&BUSDELAY[name]; return d?Math.max(-MAXD,Math.min(MAXD,d.retraso_s)):0; };
-const ymd=d=>d.getFullYear()+String(d.getMonth()+1).padStart(2,'0')+String(d.getDate()).padStart(2,'0');
+// Hora de Barcelona, sea cual sea el reloj del visitante (horarios de bus y metro, curva del tráfico, gente en la calle).
+// madridDate() devuelve una fecha cuyos campos UTC son la hora de Barcelona; la diferencia se recalcula cada minuto.
+const FMT_MAD=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/Madrid',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'});
+let madOff=0, madOffT=-1e12;
+function madridDate(ms){ const n=Date.now(); if(n-madOffT>60000){ const o={}; for(const p of FMT_MAD.formatToParts(n)) o[p.type]=p.value;
+    madOff=Date.UTC(+o.year,+o.month-1,+o.day,+o.hour,+o.minute,+o.second)-Math.floor(n/1000)*1000; madOffT=n; }
+  return new Date((ms===undefined?n:ms)+madOff); }
+const horaBcn=()=>madridDate().getUTCHours();
+const ymd=d=>d.getUTCFullYear()+String(d.getUTCMonth()+1).padStart(2,'0')+String(d.getUTCDate()).padStart(2,'0');
 async function loadBuses(){
   busState='loading';
-  try{ const r=await fetch(VIVO+'buses.json',{cache:'no-cache'}); if(!r.ok) throw new Error(r.status); BUS=prepBuses(await r.json()); busState='ready'; okLoad('bus');
+  try{ const r=await fetch(VIVO+'buses.json',{cache:'no-cache'}); if(!r.ok) throw new Error(r.status); BUS=prepBuses(await r.json()); busState='ready'; okLoad('bus'); IBX=null; progCache.clear();
        if(RB) for(const r of RB) r.list=[]; }                                // fuera los buses simulados
   catch(e){ busState='missing'; retryLater('bus',()=>{ if(busState==='missing') busState='none'; },e); }
   panel(); K.dirty();
@@ -435,7 +443,7 @@ async function loadBuses(){
 function prepBuses(d){
   const shapes=d.recorridos.map(c=>{ const a=Float32Array.from(c), n=a.length/2, cu=new Float32Array(n);
     for(let i=1;i<n;i++) cu[i]=cu[i-1]+Math.hypot(a[2*i]-a[2*i-2],a[2*i+1]-a[2*i-1]); return {c:a,cum:cu}; });
-  const now=new Date(), hoy=ymd(now), ayer=ymd(new Date(now.getTime()-864e5));
+  const now=madridDate(), hoy=ymd(now), ayer=ymd(new Date(now.getTime()-864e5));
   const sHoy=d.servicios.map(s=>s.includes(hoy)), sAyer=d.servicios.map(s=>s.includes(ayer));
   const trips=[]; let maxDur=0;
   d.viajes.forEach(([p,st,du,sv],i)=>{ if(sHoy[sv]) trips.push({p,st,du,i}); if(sAyer[sv]&&st+du>86400) trips.push({p,st:st-86400,du,i});
@@ -448,7 +456,7 @@ function prepBuses(d){
     return 0; };
   return {d,shapes,trips,maxDur,hoy,modelOf,starts:Float64Array.from(trips.map(t=>t.st))};
 }
-const secNow=()=>{ const n=new Date(); return n.getHours()*3600+n.getMinutes()*60+n.getSeconds()+n.getMilliseconds()/1000; };
+const secNow=()=>{ const n=madridDate(); return n.getUTCHours()*3600+n.getUTCMinutes()*60+n.getUTCSeconds()+n.getUTCMilliseconds()/1000; };
 function busPos(tr,t,out,S){
   S=S||BUS; const P=S.d.patrones[tr.p], sh=S.shapes[P[1]], dist=P[4], rel=P[5], OFF=S.off===undefined?1.8:S.off;
   const tau=(t-tr.st)/tr.du; let k=0; while(k<rel.length-2&&rel[k+1]<=tau) k++;
@@ -764,7 +772,7 @@ function pedUpdateArea(){
   pedCum=new Float64Array(pedCand.length); let s=0; pedCand.forEach((i,k)=>{ s+=E[i].len*PDENS[E[i].cls]; pedCum[k]=s; }); pedTot=s;
 }
 // menos gente de madrugada, con lluvia, nieve o tormenta (el tiempo real o el forzado con «Clima»)
-const pedF=()=>PHOUR[new Date().getHours()]*(1-0.6*WXV.rain)*(1-0.5*WXV.snow)*(1-0.4*WXV.storm);
+const pedF=()=>PHOUR[horaBcn()]*(1-0.6*WXV.rain)*(1-0.5*WXV.snow)*(1-0.4*WXV.storm);
 function newPed(anywhere){
   if(!pedCand.length||pedTot<=0) return false;
   for(let t=0;t<10;t++){
@@ -1140,15 +1148,45 @@ const DIRECTO={
     const d=JSON.parse(await pedirTxt('https://api.open-meteo.com/v1/forecast?latitude=41.3874&longitude=2.1686&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,is_day&timezone=Europe%2FMadrid')).current;
     return {hora_dato:d.time,temperatura:d.temperature_2m,sensacion:d.apparent_temperature,humedad:d.relative_humidity_2m,precipitacion_mm:d.precipitation,lluvia_mm:d.rain,
       codigo:d.weather_code,nubes:d.cloud_cover,viento_kmh:d.wind_speed_10m,viento_dir:d.wind_direction_10m,es_dia:!!d.is_day,descripcion:WMO_ES[d.weather_code]||''}; }}};
+// iBus: el Worker de la web (worker/index.js) guarda las previsiones de llegada en 25 paradas de control cada 2 min; aquí se
+// compara cada una con la hora programada más cercana de esa línea en esa parada (como pipeline/vivo.py) y el retraso de
+// cada línea es la mediana de los últimos 20 min. Sin el Worker (en casa, sin /api), los buses siguen solo su horario.
+let IBX=null; const progCache=new Map();
+const codParada=sid=>{ const p=String(sid).split('.'); return p.length>1?p[1]:p[0]; };   // "2.1314.683903" -> "1314"
+function progDe(linea,codi){
+  const key=linea+'|'+codi; let v=progCache.get(key); if(v) return v;
+  if(!IBX){ IBX=new Map(); BUS.d.patrones.forEach((pat,pi)=>pat[6].forEach((sid,k)=>{ const c=codParada(sid); let l=IBX.get(c); if(!l) IBX.set(c,l=[]); l.push([pi,k]); })); }
+  const pats=new Map(); for(const [pi,k] of (IBX.get(codi)||[])) if(String(BUS.d.lineas[BUS.d.patrones[pi][0]][0])===linea) pats.set(pi,k);
+  v=[]; if(pats.size) for(const tr of BUS.trips){ const k=pats.get(tr.p); if(k!==undefined) v.push(tr.st+BUS.d.patrones[tr.p][5][k]*tr.du); }
+  v.sort((a,b)=>a-b); progCache.set(key,v); return v; }
+const mediana=a=>{ const b=a.slice().sort((x,y)=>x-y), m=b.length>>1; return b.length%2?b[m]:(b[m-1]+b[m])/2; };
+DIRECTO.bus={cada:120,desc:'Retraso real por línea: previsiones iBus de TMB frente al horario',async leer(){
+  if(!BUS) throw new Error(TX('esperando el horario','waiting for the timetable'));
+  const r=await fetch('/api/ibus',{cache:'no-store'}); if(r.status===404) return null;                // sin Worker: solo horario
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  const d=await r.json(), ahora=Date.now()/1000, por={};
+  if(!d.obs||!d.obs.length) return null;
+  for(const [ts,codi,nom,cod,,lleg] of d.obs){
+    if(ahora-ts>20*60) continue;
+    const linea=[nom,cod].map(x=>x==null?null:String(x)).find(x=>x&&progDe(x,codi).length); if(!linea) continue;
+    const m=madridDate(lleg*1000), t=m.getUTCHours()*3600+m.getUTCMinutes()*60+m.getUTCSeconds(), L=progDe(linea,codi);
+    let lo=0,hi=L.length; while(lo<hi){ const mid=(lo+hi)>>1; if(L[mid]<t) lo=mid+1; else hi=mid; }
+    const cerca=[L[lo-1],L[lo]].filter(x=>x!==undefined).reduce((a,b)=>Math.abs(b-t)<Math.abs(a-t)?b:a);
+    const ret=t-cerca; if(Math.abs(ret)>20*60) continue;
+    (por[linea]||(por[linea]=[])).push(ret); }
+  const todos=Object.values(por).flat();
+  return {lineas:Object.fromEntries(Object.entries(por).map(([l,v])=>[l,{retraso_s:Math.round(mediana(v)),n:v.length}])),
+    retraso_medio_s:todos.length?Math.round(mediana(todos)):null,observaciones:todos.length,paradas_control:d.paradas_control,por_ciclo:d.por_ciclo}; }};
 let directo=!window.LOCAL||/[?&]directo=1/.test(location.search);           // web pública (sin colector), o ?directo=1 para probarlo en casa
 const dirNext={};
 async function pollDirecto(){
   const capas=(manifest&&manifest.capas)||{}, now=Date.now();
-  capas.bus=capas.bus||{estado:'simulado',descripcion:TX('Buses según el horario de TMB (sin retraso real en la web pública)','Buses follow the TMB timetable (no real delay on the public site)')};
+  capas.bus=capas.bus||{estado:'simulado',descripcion:TX('Buses según el horario de TMB; el retraso real llega en cuanto hay previsiones de iBus','Buses follow the TMB timetable; real delays arrive as soon as there are iBus forecasts')};
   capas.metro=capas.metro||{estado:'simulado',descripcion:TX('Trenes según el horario de TMB','Trains follow the TMB timetable')};
   await Promise.all(Object.entries(DIRECTO).map(async([n,f])=>{
     if(now<(dirNext[n]||0)) return; dirNext[n]=now+f.cada*1000;
-    try{ H[n](await f.leer()); capas[n]={estado:'ok',ts:new Date().toISOString(),cada:f.cada,descripcion:f.desc}; K.dirty(); }
+    try{ const v=await f.leer(); if(v===null) return;                         // fuente no disponible aquí (iBus sin Worker): se queda como está
+      H[n](v); capas[n]={estado:'ok',ts:new Date().toISOString(),cada:f.cada,descripcion:f.desc}; K.dirty(); }
     catch(e){ console.warn('vivo directo:',n,e); dirNext[n]=now+Math.min(60000,f.cada*1000);       // reintento pronto
       capas[n]=Object.assign(capas[n]||{},{estado:'error',error:String(e&&e.message||e)}); } }));
   manifest={capas}; manifestErr=false;
