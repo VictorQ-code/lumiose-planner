@@ -144,6 +144,13 @@ export default {
 
   async fetch(req, env) {
     const { pathname } = new URL(req.url);
+    // errores del visor (mensaje, navegador, zoom): uno por archivo en R2, para arreglar fallos que solo pasan en algún equipo
+    if (pathname === '/api/error' && req.method === 'POST') {
+      const txt = (await req.text()).slice(0, 8000), d = new Date();
+      await env.DATOS.put(`errores/${d.toISOString().slice(0, 10)}/${d.toISOString().slice(11, 23).replace(/[:.]/g, '')}-${Math.random().toString(36).slice(2, 7)}.json`, txt,
+        { httpMetadata: { contentType: 'application/json' } });
+      return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } });
+    }
     const API = { '/api/ibus': ['vivo/ibus.json', '{"obs":[]}'], '/api/estado': ['estado.json', '{}'], '/api/incidencias': ['vivo/incidencias.json', '{"frases":[]}'] };
     if (API[pathname]) {
       const [clave, vacio] = API[pathname], o = await env.DATOS.get(clave);

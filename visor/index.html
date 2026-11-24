@@ -232,6 +232,18 @@ renderHeader();
 /* ================= Escena ================= */
 const canvas=$('c');
 const renderer=new THREE.WebGLRenderer({canvas,antialias:true,powerPreference:'high-performance'});
+// Si la gráfica se queda sin memoria, el navegador le quita el dibujo a la página («contexto WebGL perdido») y todo
+// desaparece. Antes se quedaba así hasta recargar a mano. Ahora: aviso, recarga sola en el mismo sitio (sin la entrada)
+// y, en ese equipo, sombras más ligeras a partir de entonces (4096 en vez de 8192: 64 MB de memoria gráfica en vez de 256).
+const SS=(k,v)=>{ try{ if(v===undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k,v); }catch(e){ return null; } };
+const LS=(k,v)=>{ try{ if(v===undefined) return localStorage.getItem(k); localStorage.setItem(k,v); }catch(e){ return null; } };
+const LIGERO=LS('lumiose.ligero')==='1';
+canvas.addEventListener('webglcontextlost',e=>{
+  e.preventDefault(); LS('lumiose.ligero','1'); LS('lumiose.perdidas',String((+LS('lumiose.perdidas')||0)+1));
+  try{ const t=controls.target; SS('lumiose.cam',JSON.stringify({t:[t.x,t.y,t.z],p:cam.position.toArray(),z:cam.zoom,m:mode,ts:Date.now()})); }catch(_){}
+  const d=document.createElement('div'); d.textContent=T('La tarjeta gráfica se ha quedado sin memoria: recuperando el mapa…','The graphics card ran out of memory: restoring the map…');
+  d.style.cssText='position:fixed;inset:auto 0 45% 0;margin:auto;width:max-content;max-width:90vw;padding:10px 16px;background:#f3ead6;color:#3a2616;border:1px solid #a9483a;font:600 15px/1.3 "EB Garamond",serif;z-index:99';
+  document.body.appendChild(d); setTimeout(()=>location.reload(),1200); },false);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,1.5));
 renderer.setClearColor(PAPER,1);
 renderer.debug.checkShaderErrors=true;
@@ -726,7 +738,7 @@ paso('sombras');
 function bakeShadows(){
   let n=0; for(const c of shadowChunks) n+=c.length; if(!n) return;
   const all=new Float32Array(n); let o=0; for(const c of shadowChunks){ all.set(c,o); o+=c.length; }
-  const W=maxX-minX, D=maxZ-minZ, maxT=Math.min(renderer.capabilities.maxTextureSize,CITY?(MOVIL?4096:8192):2048);   // 8192² = 256 MB de GPU; en el móvil, 64 MB
+  const W=maxX-minX, D=maxZ-minZ, maxT=Math.min(renderer.capabilities.maxTextureSize,CITY?(MOVIL||LIGERO?4096:8192):2048);   // 8192² = 256 MB de GPU; en el móvil (o si ya se perdió el dibujo), 64 MB
   const rw=W>=D?maxT:Math.round(maxT*W/D), rh=W>=D?Math.round(maxT*D/W):maxT;
   const rt=new THREE.WebGLRenderTarget(rw,rh); rt.texture.minFilter=THREE.LinearFilter;
   const sScene=new THREE.Scene(), g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(all,3));
@@ -1670,7 +1682,9 @@ $('bBench').onclick=()=>{
 
 paso('primer dibujo');
 const LOAD_MS=performance.now()-T0;
-const INTRO=CITY&&!/[?&]intro=0/.test(location.search)?{x:1468,z:1135}:null;        // Passeig de Gràcia con Gran Via (?intro=0 lo quita)
+// vuelta tras perder el dibujo: misma vista que antes y sin la entrada
+const VUELTA=(()=>{ try{ const v=JSON.parse(SS('lumiose.cam')||'null'); SS('lumiose.cam',''); return v&&Date.now()-v.ts<60000?v:null; }catch(e){ return null; } })();
+const INTRO=CITY&&!VUELTA&&!/[?&]intro=0/.test(location.search)?{x:1468,z:1135}:null;        // Passeig de Gràcia con Gran Via (?intro=0 lo quita)
 // La pantalla de carga sigue hasta que vivo.js tenga calles, horarios, red ciclista, aceras y los primeros datos en vivo
 // (K.listo), con un tope de 15 s por si alguna fuente externa tarda. Mientras está puesta, el mapa no recibe ni rueda ni dedos.
 $('bar').firstElementChild.style.width='100%';
@@ -1681,6 +1695,7 @@ $('msg').textContent=T('Preparando el tráfico, los buses y los datos en vivo…
   while(!(window.CITY3D&&window.CITY3D.listo)&&performance.now()-t<15000) await sleep(50);              // vivo.js aún no ha llegado
   if(window.CITY3D&&window.CITY3D.listo) await Promise.race([window.CITY3D.listo,sleep(Math.max(0,15000-(performance.now()-t)))]);
   await sleep(400);                                                                                          // un respiro para el primer dibujo con todo
+  if(VUELTA){ controls.target.fromArray(VUELTA.t); cam.position.fromArray(VUELTA.p); cam.zoom=VUELTA.z; cam.lookAt(controls.target); cam.updateProjectionMatrix(); controls.update(); }
   dirty=true; window.__visorListo=true; $('load').style.opacity=0; setTimeout(()=>$('load').style.display='none',500);
   // Entrada: un momento la ciudad entera y luego vuelo a pie de calle (Passeig de Gràcia con Gran Via), donde ya se ven
   // coches, buses, bicis y gente. Así nadie ve una ciudad quieta al llegar. Si la persona toca el mapa antes, manda ella.

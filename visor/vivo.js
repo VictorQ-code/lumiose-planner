@@ -1749,7 +1749,18 @@ function incStep(now,dt,mpp){
 
 /* ================= Bucle ================= */
 let lastPanel=0, simErr='', lastStep=0;
-K.frameHooks.push((now,dt)=>{ try{ return frame(now,dt); }catch(e){ if(!simErr){ simErr=String(e&&e.stack||e).slice(0,300); console.error('vivo:',e); panel(); } return false; } });
+// Errores: se muestran en el panel y se envían una vez por capa y visita al Worker (/api/error, sin datos personales:
+// mensaje, navegador y zoom), para poder arreglar fallos que solo pasan en algún equipo
+const enviados=new Set();
+function fallo(donde,e){
+  const msg=String(e&&e.stack||e).slice(0,600);
+  if(!simErr){ simErr=donde+': '+msg.slice(0,280); console.error('vivo:',donde,e); panel(); }
+  if(enviados.has(donde)) return; enviados.add(donde);
+  try{ const cuerpo=JSON.stringify({donde,msg,ua:navigator.userAgent,mpp:K.mppNow&&+K.mppNow().toFixed(3),embed:!!window.EMBED,
+      gl:(()=>{ try{ const g=K.renderer.getContext(), x=g.getExtension('WEBGL_debug_renderer_info'); return x?g.getParameter(x.UNMASKED_RENDERER_WEBGL):''; }catch(_){ return ''; } })(),ts:new Date().toISOString()});
+    if(navigator.sendBeacon) navigator.sendBeacon('/api/error',new Blob([cuerpo],{type:'application/json'})); else fetch('/api/error',{method:'POST',body:cuerpo,keepalive:true}); }catch(_){} }
+function capa(donde,f){ try{ f(); }catch(e){ fallo(donde,e); } }
+K.frameHooks.push((now,dt)=>{ try{ return frame(now,dt); }catch(e){ fallo('fotograma',e); vehGroup.visible=true; return false; } });
 function frame(now,dt){
   const city=K.mode==='city'; root.visible=city;
   if(K.mode==='under'){ if(metState==='none') loadMetro(); if(MET){ metroStep(now); if(now-lastPanel>2000){ lastPanel=now; panel(); } return true; } return false; }
@@ -1762,7 +1773,7 @@ function frame(now,dt){
   try{ if(INC_DEMO&&!incReady&&RED&&tramState!=='loading'&&tramState!=='none'){ incReady=true; incDemo(); }
     if(!INC_DEMO&&RED&&now-incLast>30000){ incLast=now; loadIncidencias(); }      // avisos reales del Ayuntamiento, cada 30 s (si falla, a los 10 s)
     incGroup.visible=INCS.length>0; incA=INCS.length?incStep(now,dt,mpp):false; }
-  catch(e){ if(!simErr){ simErr='incidencias: '+String(e&&e.stack||e).slice(0,280); console.error('vivo:',e); panel(); } }
+  catch(e){ fallo('incidencias',e); }
   ribbonGroup.visible=ON.trafico&&!!ribbon; ribbonMat.uniforms.w.value=mpp*2.2; ribbonMat.uniforms.op.value=mpp<0.8?0.35:0.9;
   bikeGroup.visible=ON.bicing&&!!bars;
   let anim=false;
@@ -1771,19 +1782,23 @@ function frame(now,dt){
   if(ON.vehiculos&&mpp<VEH_MPP*1.6&&busState==='none') loadBuses();
   if(ON.vehiculos&&mpp<VEH_MPP*1.6&&tramState==='none') loadTram();
   nTramWait=0;
-  if(ON.vehiculos&&mpp<VEH_MPP&&RED){ ensureRenderers();
-    if(TRAM){ if(!RT) RT=makeRenderer(TRAM_MODEL,90); tramStep(now,dt,true); }      // primero el tranvía: reserva sus cruces
-    sync(now); step(dt); if(BUS) busStep(now,dt); anim=true; lastStep=now; }
-  else if(RT) setCount(RT,0);
+  // cada capa por separado: si una falla en algún navegador, las demás siguen (y el error se apunta y se envía)
+  capa('vehículos',()=>{
+    if(ON.vehiculos&&mpp<VEH_MPP&&RED){ ensureRenderers();
+      if(TRAM){ if(!RT) RT=makeRenderer(TRAM_MODEL,90); tramStep(now,dt,true); }      // primero el tranvía: reserva sus cruces
+      sync(now); step(dt); if(BUS) busStep(now,dt); anim=true; lastStep=now; }
+    else if(RT) setCount(RT,0); });
   if(tramRails) tramRails.visible=ON.vehiculos&&mpp<VEH_MPP*1.6;
   if(ON.bicing&&mpp<CYC_MPP*1.6&&bkState==='none') loadBici();
   let cyc=false;
-  if(ON.bicing&&mpp<CYC_MPP&&BK&&BIKE){ if(!RBC) RBC=BIKE_MODELS.map(m=>makeRenderer(m,CYC_CAP)); cycStep(now,dt); cyc=true; }
-  else if(RBC) for(const r of RBC) setCount(r,0);
+  capa('ciclistas',()=>{
+    if(ON.bicing&&mpp<CYC_MPP&&BK&&BIKE){ if(!RBC) RBC=BIKE_MODELS.map(m=>makeRenderer(m,CYC_CAP)); cycStep(now,dt); cyc=true; }
+    else if(RBC) for(const r of RBC) setCount(r,0); });
   if(ON.personas&&mpp<PED_MPP*1.6){ if(redState==='none') loadRed(); if(calzState==='none') loadCalzada(); }
   let ped=false;
-  if(ON.personas&&mpp<PED_MPP&&RED&&CALZ){ if(!PN) prepPed(); if(!PEDR) PEDR=PED_MODELS.map(m=>makeRenderer(m,PED_CAP)); pedFrame(now,dt); ped=true; }
-  else if(PEDR){ for(const r of PEDR) setCount(r,0); nPed=nPedWait=0; }
+  capa('personas',()=>{
+    if(ON.personas&&mpp<PED_MPP&&RED&&CALZ){ if(!PN) prepPed(); if(!PEDR) PEDR=PED_MODELS.map(m=>makeRenderer(m,PED_CAP)); pedFrame(now,dt); ped=true; }
+    else if(PEDR){ for(const r of PEDR) setCount(r,0); nPed=nPedWait=0; } });
   { const hi=mpp<HI_MPP; for(const r of [...(RC||[]),...(RB||[]),...(RP||[]),...(RBC||[]),...(RT?[RT]:[])]){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   if(RP&&mpp>=PARK_MPP) for(const r of RP){ for(const im of r.hi) im.visible=false; for(const im of r.lo) im.visible=false; }
   if(PEDR){ const hi=mpp<PED_HI; for(const r of PEDR){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
