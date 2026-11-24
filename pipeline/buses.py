@@ -85,12 +85,29 @@ def proyectar(pts: list, acum: list, x: float, z: float, desde: float) -> float:
     return mejor
 
 
-def construir(tipos: set, salida: Path, que: str) -> None:
+IDS = ("route_id", "trip_id", "shape_id", "service_id", "stop_id")
+
+
+def construir(tipos: set, salida: Path, que: str, zips: list | None = None, fuente: str = "TMB (GTFS)") -> None:
+    """zips: [(ruta del GTFS, prefijo)]; con varios (p. ej. las dos redes de tranvía) los identificadores llevan el
+    prefijo de su red, porque se repiten entre ellas."""
     t0 = time.time()
-    if not GTFS.exists():
-        raise SystemExit("No existe data/bronze/tmb/gtfs.zip. Ejecuta antes pipeline/metro_barrio.py (descarga el GTFS de TMB).")
-    z = zipfile.ZipFile(GTFS)
-    leer = lambda n: csv.DictReader(io.TextIOWrapper(z.open(n), encoding="utf-8-sig"))  # noqa: E731
+    zips = zips or [(GTFS, "")]
+    for zp, _ in zips:
+        if not Path(zp).exists():
+            raise SystemExit(f"No existe {zp}." + (" Ejecuta antes pipeline/metro_barrio.py (descarga el GTFS de TMB)." if zp == GTFS else ""))
+    abiertos = [(zipfile.ZipFile(zp), pre) for zp, pre in zips]
+
+    def leer(n):
+        for z, pre in abiertos:
+            if n not in z.namelist():
+                continue                        # p. ej. el tranvía no tiene calendar.txt (solo calendar_dates.txt)
+            for r in csv.DictReader(io.TextIOWrapper(z.open(n), encoding="utf-8-sig")):
+                if pre:
+                    for k in IDS:
+                        if r.get(k):
+                            r[k] = pre + r[k]
+                yield r
 
     rutas = {r["route_id"]: r for r in leer("routes.txt") if r["route_type"] in tipos}
     viajes = {t["trip_id"]: t for t in leer("trips.txt") if t["route_id"] in rutas}
@@ -197,7 +214,7 @@ def construir(tipos: set, salida: Path, que: str) -> None:
 
     salida_viajes.sort(key=lambda v: v[1])
     usadas_p = {s for p in patrones for s in p[6]}
-    out = {"version": 1, "generado": time.strftime("%Y-%m-%dT%H:%M:%S"), "fuente": f"TMB (GTFS) · horario programado ({que})",
+    out = {"version": 1, "generado": time.strftime("%Y-%m-%dT%H:%M:%S"), "fuente": f"{fuente} · horario programado ({que})",
            "lineas": lineas, "recorridos": [[round(q, 1) for p in f for q in p] for f in formas],
            "patrones": patrones, "servicios": servicios, "viajes": salida_viajes,
            "paradas": {s: [paradas[s][0], paradas[s][1], paradas[s][2]] for s in usadas_p if s in paradas}}

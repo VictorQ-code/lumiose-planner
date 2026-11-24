@@ -281,6 +281,7 @@ function spawn(v,anywhere){
     const ei=pick(list,cw), e=E[ei], dir=(e.one||Math.random()<0.5)?0:1, s=Math.random()*e.len;
     const u=dir?e.len-s:s, i=Math.min(e.cum.length-2,Math.max(0,e.cum.findIndex(c=>c>u)-1));
     if(!anywhere&&t<12&&!offScreen(e.c[2*i],e.c[2*i+1])) continue;
+    if(TRAM&&tramCerca(e.c[2*i],e.c[2*i+1],3)) continue;                    // nunca aparece encima de la vía del tranvía
     const lane=Math.floor(Math.random()*lanesDir(e)), l=lanesMap.get((ei*2+dir)*8+lane);
     if(l&&l.some(o=>Math.abs(o.s-s)<(o.len+v.len)/2+4)) continue;
     Object.assign(v,{e:ei,dir,s,lane,age:0,fade:-1,wait:0,ahead:null});
@@ -378,6 +379,8 @@ function drive(v,dt){
   }
   if(v.px!==undefined&&busGrid.size){ const h=aheadIn(busGrid,v.px,v.pz,v.ang,35,null);
     if(h){ const g=h[0]-(h[1].len+L)/2; if(g<gap){ gap=g; dv=v.v-h[1].v; } } }
+  if(v.px!==undefined&&TRAM){ const g=tramParar(v.px,v.pz,Math.cos(v.ang),-Math.sin(v.ang),Math.max(25,v.v*v.v/(2*B_DEC)+L+12),L,gap);   // tranvía: prioridad
+    if(g>=0&&g<gap){ gap=g; dv=v.v; } }
   const a=v.bus?A_BUS:A_CAR, ss=S0+Math.max(0,v.v*T_HW+v.v*dv/(2*Math.sqrt(a*B_DEC)));
   let acc=a*(1-Math.pow(v.v/v0,4)-(gap<1e8?(ss/Math.max(gap,0.05))**2:0));
   v.v=Math.max(0,v.v+Math.max(acc,-9)*dt);
@@ -472,7 +475,7 @@ function busPos(tr,t,out,S){
   const tau=(t-tr.st)/tr.du; let k=0; while(k<rel.length-2&&rel[k+1]<=tau) k++;
   const tk=tr.st+rel[k]*tr.du, T=Math.max(1,(rel[k+1]-rel[k])*tr.du), dwell=Math.min(S.dwell||15,T*0.3);
   let f=(t-tk-dwell)/Math.max(1,T-dwell); f=f<0?0:f>1?1:f; f=f*f*(3-2*f);                 // sale y frena suave
-  const dd=dist[k]+(dist[k+1]-dist[k])*f, c=sh.c, cu=sh.cum, n=cu.length;
+  const dd=dist[k]+(dist[k+1]-dist[k])*f, c=sh.c, cu=sh.cum, n=cu.length; tr.dd=dd;
   let lo=0,hi=n-2; while(lo<hi){ const m=(lo+hi+1)>>1; if(cu[m]<=dd) lo=m; else hi=m-1; }
   const L=(cu[lo+1]-cu[lo])||1, u=Math.min(1,Math.max(0,(dd-cu[lo])/L));
   const dx=(c[2*lo+2]-c[2*lo])/L, dz=(c[2*lo+3]-c[2*lo+1])/L;
@@ -502,6 +505,8 @@ function busStep(now,dt){
     if(!stop&&tr.px!==undefined&&RED){ const da=-tr.pa, adv=(out[0]-tr.px)*Math.cos(da)+(out[1]-tr.pz)*Math.sin(da), half=r.model.len/2;
       const g=stopForLight(tr.px,tr.pz,da,half,tr.sp||0,1.6,half+40,7);           // semáforo en rojo delante
       if(g>=0&&adv>g){ stop=true; nBusLight++; }
+      if(!stop&&TRAM){ const L=r.model.len, gt=tramParar(tr.px,tr.pz,Math.cos(da),Math.sin(da),half+40,L,blk?blk[0]-blk[1].len/2-half:undefined);   // tranvía: prioridad
+        if(gt>=0&&adv>gt){ stop=true; nTramWait++; } }
       if(!stop){ const j=nodeAhead(RED.jgrid,tr.px,tr.pz,da,half+12,6);         // cruce sin semáforo ocupado por un coche
         if(j){ const o=busy.get(j[1]); if(o&&o!==tr&&!o.trip&&(tr.jw||0)<5&&adv>j[0]-half-STOPLINE){ stop=true; nBusJunc++; tr.jw=(tr.jw||0)+dt; } else if(!o) tr.jw=0; } } }
     if(stop){ tr.hold=Math.min(300,(tr.hold||0)+dt); if(tr.px!==undefined){ out[0]=tr.px; out[1]=tr.pz; out[2]=tr.pa; } }
@@ -553,6 +558,98 @@ function metroStep(now){
   for(const tr of metActive){ const li=MET.d.patrones[tr.p][0], m=MET.mesh[li]; if(n[li]>=60) continue;
     busPos(tr,t,PB,MET); writePose(m.instanceMatrix.array,n[li],PB[0],PB[1],PB[2],Math.max(0.05,PB[3]),-MET.depth[li]); n[li]++; }
   MET.mesh.forEach((m,i)=>{ m.count=n[i]; m.instanceMatrix.needsUpdate=true; });
+}
+
+/* ================= Tranvía (TRAM: Trambaix T1–T3 y Trambesòs T4–T6): horario oficial (GTFS) sobre sus vías ================= */
+// Va por la calle, así que tiene prioridad: cuando un tranvía está a menos de ~60 m de un punto donde su vía corta el paso
+// de otros (calles, carril bici, pasos de peatones), ese punto queda reservado y coches, buses, bicis y personas esperan
+// antes de la PRIMERA vía (nunca entre las dos). Un coche tampoco entra en las vías si la cola no le deja salir del otro lado.
+const TRAM_LEN=32.5, TRAM_OFF=1.7, TRAM_ANTES=60, TRAM_DESPUES=4, TRAM_GRUPO=8;
+const TRAM_GREEN=0x4f9a5c;
+function tranviaParts(){ const W=2.65, P=[...bodyBus(-16.25,16.25,C.white,{W,belt:1.0,top:2.75,H:3.2,doors:[12.6,6.9,1.2,-4.5,-10.2]}),
+    [bx(-16.25,16.25,.35,.62,W+.02),TRAM_GREEN], [bx(-16.25,16.25,2.75,2.9,W+.02),TRAM_GREEN]];
+  for(const x of [-9.75,-3.25,3.25,9.75]) P.push([bx(x-.12,x+.12,.4,3.15,W+.03),C.dark,.7]);            // fuelles entre módulos
+  for(const x of [-12.5,-1.5,7.5]) P.push([bx(x-1.4,x+1.4,3.2,3.55,1.8),C.gray]);                     // equipos del techo
+  P.push([new THREE.BoxGeometry(1.6,.06,.06).rotateZ(.6).translate(1.0,3.95,0),C.black,.7],[bx(.2,1.9,4.3,4.36,1.2),C.black,.7]);   // pantógrafo
+  return [...P, ...wheels([14,8,-8,-14],.36,.25,W)]; }
+const TRAM_MODEL={name:'tranvía',w:1,lowCol:C.white,len:TRAM_LEN,bus:true,parts:tranviaParts,
+  low:()=>[[bx(-16.25,16.25,.35,1.0,2.6),C.white],[bx(-16.25,16.25,.35,.62,2.62),TRAM_GREEN],[bx(-16.1,16.1,1.0,2.75,2.54),C.glass,.55],[bx(-16.25,16.25,2.75,3.2,2.6),C.white]]};
+let TRAM=null, tramState='none', tramActive=[], tramLastScan=0, nTramAll=0, nTram=0, RT=null, tramRails=null, tramT=-1e9, nTramWait=0;
+async function loadTram(){
+  tramState='loading';
+  try{ const r=await fetch(VIVO+'tranvia.json',{cache:'no-cache'}); if(!r.ok) throw new Error(r.status);
+    TRAM=prepBuses(await r.json()); TRAM.off=TRAM_OFF; TRAM.dwell=20; prepTramGrid(); tramState='ready'; okLoad('tram'); }
+  catch(e){ tramState='missing'; retryLater('tram',()=>{ if(tramState==='missing') tramState='none'; },e); }
+  panel(); K.dirty();
+}
+// rejilla con los tramos de vía (cada sentido es un recorrido): para saber rápido si un camino corta una vía
+const TG=40, tgrid=new Map();
+function prepTramGrid(){
+  const pos=[];
+  TRAM.shapes.forEach((sh,si)=>{ const c=sh.c, n=c.length/2;
+    for(let i=0;i<n-1;i++){ const x0=c[2*i],z0=c[2*i+1],x1=c[2*i+2],z1=c[2*i+3];
+      const seg=[si,i,x0,z0,x1,z1];
+      for(let ix=Math.floor(Math.min(x0,x1)/TG);ix<=Math.floor(Math.max(x0,x1)/TG);ix++) for(let iz=Math.floor(Math.min(z0,z1)/TG);iz<=Math.floor(Math.max(z0,z1)/TG);iz++){
+        const k=ix*100003+iz; let l=tgrid.get(k); if(!l) tgrid.set(k,l=[]); l.push(seg); }
+      // carriles: dos a cada lado del eje de su sentido (ancho de vía 1,435 m)
+      const L=Math.hypot(x1-x0,z1-z0)||1, nx=-(z1-z0)/L, nz=(x1-x0)/L;
+      for(const o of [TRAM_OFF-0.72,TRAM_OFF+0.72]) pos.push(x0+nx*o, Y0-0.3, z0+nz*o, x1+nx*o, Y0-0.3, z1+nz*o); } });
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(pos,3));
+  tramRails=new THREE.LineSegments(g,new THREE.LineBasicMaterial({color:0x5b4c40,transparent:true,opacity:0.75}));
+  tramRails.frustumCulled=false; tramRails.renderOrder=2; root.add(tramRails);
+}
+// ¿está reservado el punto a D metros del inicio del recorrido 'si'? (algún tranvía encima o a menos de TRAM_ANTES)
+function tramOcupado(si,D){ const l=TRAM.occ[si]; if(!l) return false;
+  for(let i=0;i<l.length;i+=2) if(D>l[i]-TRAM_DESPUES-TRAM_LEN/2&&D<l[i]+TRAM_LEN/2+TRAM_ANTES*l[i+1]) return true; return false; }
+// cortes de un camino recto (x,z)+(dx,dz)·t, t∈[0,len], con las vías → lista de [t, recorrido, D] ordenada por t
+const _cortes=[];
+function tramCortes(x,z,dx,dz,len){ _cortes.length=0; if(!TRAM||!tgrid.size) return _cortes;
+  const x1=x+dx*len, z1=z+dz*len, vis=new Set();
+  for(let ix=Math.floor(Math.min(x,x1)/TG);ix<=Math.floor(Math.max(x,x1)/TG);ix++) for(let iz=Math.floor(Math.min(z,z1)/TG);iz<=Math.floor(Math.max(z,z1)/TG);iz++){
+    const l=tgrid.get(ix*100003+iz); if(!l) continue;
+    for(const s of l){ if(vis.has(s)) continue; vis.add(s);
+      const [si,i,ax,az,bx_,bz]=s, ex=bx_-ax, ez=bz-az, den=dx*ez-dz*ex; if(Math.abs(den)<1e-6) continue;   // paralelo: no corta
+      const wx=ax-x, wz=az-z, t=(wx*ez-wz*ex)/den, u=(wx*dz-wz*dx)/den;
+      // el eje del recorrido va entre las dos vías de su sentido: se amplía un poco el tramo para no colarse por los extremos
+      if(t>=-TRAM_OFF&&t<=len&&u>=-0.02&&u<=1.02){ const sh=TRAM.shapes[si]; _cortes.push([t,si,sh.cum[i]+u*Math.hypot(ex,ez)]); } } }
+  _cortes.sort((a,b)=>a[0]-b[0]); return _cortes; }
+// Para quien avanza por (x,z) con rumbo (dx,dz): distancia a la que debe parar (antes de la primera vía del cruce), o -1.
+// Si 'cola' (hueco libre tras el cruce) no basta para salir de las vías con su longitud 'L', también para antes.
+function tramParar(x,z,dx,dz,look,L,cola){
+  if(!TRAM||performance.now()-tramT>600) return -1;                             // sin tranvías al día: nadie espera
+  // se mira también un poco hacia atrás: quien ya está entre las vías de un cruce sigue y sale (nunca se queda en medio)
+  const G=TRAM_GRUPO+L/2, cs=tramCortes(x-dx*G,z-dz*G,dx,dz,look+2*G+3); if(!cs.length) return -1;
+  // grupos de vías seguidas (los dos sentidos y los recorridos que comparten vía)
+  let g0=0;
+  for(let i=0;i<=cs.length;i++){
+    if(i<cs.length&&(i===g0||cs[i][0]-cs[i-1][0]<TRAM_GRUPO)) continue;
+    const t0=cs[g0][0]-G, t1=cs[i-1][0]-G;
+    if(t0>look) break;
+    if(t0-L/2>-0.3){                                                             // aún no ha pisado la primera vía del grupo
+      let res=false; for(let k=g0;k<i&&!res;k++) res=tramOcupado(cs[k][1],cs[k][2]);
+      // sin sitio al otro lado para salir entero de las vías: también espera antes
+      if(res||(cola!==undefined&&cola<t1+L/2+1.5)) return Math.max(0,t0-L/2-1.5); }
+    g0=i; }
+  return -1; }
+// ¿hay vía a menos de 'r' m de (x,z)? (para no hacer aparecer coches encima)
+function tramCerca(x,z,r){ if(!TRAM) return false; const l=tgrid.get(Math.floor(x/TG)*100003+Math.floor(z/TG)); if(!l) return false;
+  for(const [,,ax,az,bx_,bz] of l){ const ex=bx_-ax, ez=bz-az, L2=ex*ex+ez*ez||1, u=Math.max(0,Math.min(1,((x-ax)*ex+(z-az)*ez)/L2));
+    if(Math.hypot(ax+ex*u-x,az+ez*u-z)<r+TRAM_OFF+1) return true; } return false; }
+function tramStep(now,dt,draw){
+  const t=secNow(); tramT=performance.now();
+  if(now-tramLastScan>1000){ tramLastScan=now; tramActive=[];
+    const S=TRAM.starts; let lo=0,hi=S.length; const from=t-TRAM.maxDur; while(lo<hi){ const m=(lo+hi)>>1; if(S[m]<from) lo=m+1; else hi=m; }
+    for(let i=lo;i<S.length&&S[i]<=t;i++){ const tr=TRAM.trips[i]; if(tr.st+tr.du>=t) tramActive.push(tr); }
+    nTramAll=tramActive.length; }
+  // reservas: por recorrido, posición de cada tranvía y si se mueve (parado en el andén reserva menos por delante)
+  const occ=TRAM.occ||(TRAM.occ=[]); for(const l of occ) if(l) l.length=0;
+  let n=0; const R2=(area.r*1.3)**2;
+  for(const tr of tramActive){ busPos(tr,t,PB,TRAM); const si=TRAM.d.patrones[tr.p][1], dd=tr.dd;
+    const mov=tr.ddPrev===undefined?1:Math.min(1,Math.abs(dd-tr.ddPrev)/Math.max(dt,1e-3)/2+0.35); tr.ddPrev=dd;
+    (occ[si]||(occ[si]=[])).push(dd,mov);
+    if(!draw||!RT||(PB[0]-area.x)**2+(PB[1]-area.z)**2>R2||n>=RT.cap) continue;
+    writePose(RT.mat.array,n,PB[0],PB[1],PB[2],PB[3]*VSC); const c=RT.color.array; c[n*3]=c[n*3+1]=c[n*3+2]=1; n++; }
+  if(RT) setCount(RT,draw?n:0); nTram=draw?n:0;
 }
 
 /* ================= Ciclistas de Bicing ================= */
@@ -669,6 +766,8 @@ function cycStep(now,dt){
     else{ const ease=c.sale?Math.min(1,0.35+c.s/8):1, rem=c.len-c.s; let ds=c.v*ease*Math.min(1,0.3+rem/10)*dt;   // arranca y frena en la estación
       if(c.x!==undefined&&RED&&(c.x-cycArea.x)**2+(c.z-cycArea.z)**2<(cycArea.r*1.4)**2){    // semáforo en rojo delante: espera
         const g=stopForLight(c.x,c.z,c.ang,0.9,c.cv||c.v,2.5,20,6); if(g>=0&&g<ds){ ds=Math.max(0,g); nCycLight++; } }
+      if(c.x!==undefined&&TRAM){ const g=tramParar(c.x,c.z,Math.cos(c.ang),Math.sin(c.ang),Math.max(4,ds+3),1.8);   // tranvía: prioridad
+        if(g>=0&&g<ds){ ds=Math.max(0,g); nTramWait++; } }
       c.cv=ds/Math.max(dt,1e-3); c.s+=ds;
       if(c.s>=c.len-0.3){ c.s=c.len; c.fade=0.6; } }
     const n=c.cu.length; let lo=0,hi=n-2; while(lo<hi){ const m=(lo+hi+1)>>1; if(c.cu[m]<=c.s) lo=m; else hi=m-1; }
@@ -812,12 +911,17 @@ function pedSync(now){
   for(const p of peds){ if(n<=pedTarget) break; if(!p.remove&&p.fade<0){ p.remove=true; p.fade=0.6; n--; } }
   pedFirst=false;
 }
+// tranvía: si su camino corta una vía reservada, espera antes de la primera (los que ya están entre las vías siguen)
+function pedTram(p,ds){ if(!TRAM) return false;
+  pedPos(p,PQ); const g=tramParar(PQ[0],PQ[1],Math.cos(PQ[2]),-Math.sin(PQ[2]),ds+1.2,0.5);
+  if(g>=0&&g<ds+0.01){ p.waiting=true; nPedWait++; nTramWait++; return true; } return false; }
 function pedMove(p,dt){
   p.age+=dt; p.waiting=false;
   if(p.fade>=0){ p.fade-=dt; if(p.fade<=0) p.dead=true; return; }
-  if(p.tr){ p.tr.s+=p.v*dt; if(p.tr.s>=p.tr.L){ const n=p.tr; p.e=n.e; p.dir=n.dir; p.lat=n.lat; p.tr=null; p.nx=null; pedRange(p); p.s=0; } return; }
+  if(p.tr){ if(pedTram(p,p.v*dt)) return; p.tr.s+=p.v*dt; if(p.tr.s>=p.tr.L){ const n=p.tr; p.e=n.e; p.dir=n.dir; p.lat=n.lat; p.tr=null; p.nx=null; pedRange(p); p.s=0; } return; }
   if(!p.nx&&p.s>p.W-6) planNext(p);
   let ds=p.v*dt;
+  if(pedTram(p,ds)) return;
   if(p.nx&&p.nx.sig&&!p.go){ const stop=p.W-p.back;                           // semáforo: espera en el bordillo al verde de su sentido
     if(p.s+ds>=stop){ if(pedGreen(p.nx.node,p.nx.ang)>p.nx.L/p.v+1) p.go=true; else{ ds=Math.max(0,stop-p.s); p.waiting=true; nPedWait++; } } }
   p.s+=ds;
@@ -1330,6 +1434,8 @@ function panel(){
       +(nl?TX(`${nl} de ${BUS.d.lineas.length} líneas con retraso real (iBus) · `,`${nl} of ${BUS.d.lineas.length} lines with real delay (iBus) · `)+rm
           :TX('horario TMB','TMB timetable')+(caps.bus&&caps.bus.estado==='error'?' · iBus: '+caps.bus.error:TX(' (sin retrasos reales todavía)',' (no real delays yet)'))); }
   else if(busState==='missing') bs=TX('falta el horario: ejecuta <b>python pipeline\\buses.py</b>','timetable missing');
+  if(TRAM) bs+=TX(`<br>${nTramAll} tranvías en servicio ahora (horario TRAM) · ${nTram} cerca`,`<br>${nTramAll} trams running now (TRAM timetable) · ${nTram} nearby`)
+    +(nTramWait?TX(` · ${nTramWait} esperando a que pase`,` · ${nTramWait} waiting for it to pass`):'');
   let wx='';
   if(WX){ const desc=window.LANG==='en'?wmoTxt(WX.codigo):(WX.descripcion||wmoTxt(WX.codigo));
     wx=`<div class="wx">${Math.round(WX.temperatura)} °C · ${desc} · ${TX('viento','wind')} ${Math.round(WX.viento_kmh)} km/h${WX.lluvia_mm?` · ${TX('lluvia','rain')} ${WX.lluvia_mm} mm`:''}</div>`; }
@@ -1356,7 +1462,13 @@ function frame(now,dt){
   if(ON.vehiculos&&mpp<VEH_MPP*1.6&&redState==='none') loadRed();
   vehGroup.visible=false;
   if(ON.vehiculos&&mpp<VEH_MPP*1.6&&busState==='none') loadBuses();
-  if(ON.vehiculos&&mpp<VEH_MPP&&RED){ ensureRenderers(); sync(now); step(dt); if(BUS) busStep(now,dt); anim=true; lastStep=now; }
+  if(ON.vehiculos&&mpp<VEH_MPP*1.6&&tramState==='none') loadTram();
+  nTramWait=0;
+  if(ON.vehiculos&&mpp<VEH_MPP&&RED){ ensureRenderers();
+    if(TRAM){ if(!RT) RT=makeRenderer(TRAM_MODEL,90); tramStep(now,dt,true); }      // primero el tranvía: reserva sus cruces
+    sync(now); step(dt); if(BUS) busStep(now,dt); anim=true; lastStep=now; }
+  else if(RT) setCount(RT,0);
+  if(tramRails) tramRails.visible=ON.vehiculos&&mpp<VEH_MPP*1.6;
   if(ON.bicing&&mpp<CYC_MPP*1.6&&bkState==='none') loadBici();
   let cyc=false;
   if(ON.bicing&&mpp<CYC_MPP&&BK&&BIKE){ if(!RBC) RBC=BIKE_MODELS.map(m=>makeRenderer(m,CYC_CAP)); cycStep(now,dt); cyc=true; }
@@ -1365,7 +1477,7 @@ function frame(now,dt){
   let ped=false;
   if(ON.personas&&mpp<PED_MPP&&RED&&CALZ){ if(!PN) prepPed(); if(!PEDR) PEDR=PED_MODELS.map(m=>makeRenderer(m,PED_CAP)); pedFrame(now,dt); ped=true; }
   else if(PEDR){ for(const r of PEDR) setCount(r,0); nPed=nPedWait=0; }
-  { const hi=mpp<HI_MPP; for(const r of [...(RC||[]),...(RB||[]),...(RP||[]),...(RBC||[])]){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
+  { const hi=mpp<HI_MPP; for(const r of [...(RC||[]),...(RB||[]),...(RP||[]),...(RBC||[]),...(RT?[RT]:[])]){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   if(RP&&mpp>=PARK_MPP) for(const r of RP){ for(const im of r.hi) im.visible=false; for(const im of r.lo) im.visible=false; }
   if(PEDR){ const hi=mpp<PED_HI; for(const r of PEDR){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   anim=anim||cyc||ped;
@@ -1378,11 +1490,11 @@ window.__vivo={
   wxModes:Object.keys(WX_SIMS), get wxSim(){ return wxSim; }, setWx:k=>setWxSim(k),
   setOn:(k,v)=>{ ON[k]=!!v; K.dirty(); panel(); }, get ON(){ return {...ON}; }, get peds(){ return peds; }, isRoad:(x,z)=>CALZ?isRoad(x,z):null, pedXY:p=>{ const o=new Float32Array(4); pedPos(p,o); return [o[0],o[1]]; },   // el test apaga y enciende capas sin tocar lo guardado
   wxSnap:()=>{ wxT=wxTarget(); for(const k in WXV) WXV[k]=wxT[k]; K.dirty(); },
-  wx:()=>({...WXV,sim:wxSim,t:wxT,m1:wxM1.visible,m2:wxM2.visible,u:Object.fromEntries(Object.entries(wxMul.uniforms).map(([k,v])=>[k,typeof v.value==='number'?v.value:'·']))}),stats:()=>({lamps:lamps&&lamps.visible?nLamps:0,lmLights:lamps&&lamps.visible?nLmLights:0,ribbons:!!(ribbon&&ribbonGroup.visible),tramos:TRAF?TRAF.size:0,tramosState,bikeStations:BIKE&&BIKE.estaciones?BIKE.estaciones.length:0,bars:!!(bars&&bikeGroup.visible),wxM1:wxM1.visible,wxM2:wxM2.visible,manifest:!manifestErr,capas:manifest&&manifest.capas?Object.fromEntries(Object.entries(manifest.capas).map(([k,c])=>[k,c.estado||''])):{},cars:nCars,stopped:nStopped,parked:nParked,buses:nBuses,busAll:nBusAll,busLight:nBusLight,busJunc:nBusJunc,cyc:nCyc,cycLight:nCycLight,peds:nPed,pedWait:nPedWait,pedTarget,calzada:calzState,metro:nMetroAll,red:redState,bus:busState,bici:bkState,err:simErr,loadErr:{...LOADERR}}),get RED(){return RED;},get cand(){return cand;},get area(){return area;},get candTot(){return candTot;},get RC(){return RC;},get RB(){return RB;},get TRAF(){return TRAF;},get busActive(){return busActive;},get cycs(){return cycs;},get cyc(){ return {bkState,queue:cycQueue.length,cycs:cycs.length,area:cycArea,bike:!!BIKE,seen:cycSeen,ev:BIKE&&BIKE.eventos&&BIKE.eventos.length,rbc:!!RBC,cerca:cycs.filter(c=>c.x!==undefined).map(c=>[c.x,c.z,Math.hypot(c.x-cycArea.x,c.z-cycArea.z)]).sort((a,b)=>a[2]-b[2]).slice(0,3)}; },busXY(tr){ const o=new Float32Array(4); busPos(tr,secNow(),o); return [o[0],o[1]]; }};   // inspección
+  wx:()=>({...WXV,sim:wxSim,t:wxT,m1:wxM1.visible,m2:wxM2.visible,u:Object.fromEntries(Object.entries(wxMul.uniforms).map(([k,v])=>[k,typeof v.value==='number'?v.value:'·']))}),stats:()=>({lamps:lamps&&lamps.visible?nLamps:0,lmLights:lamps&&lamps.visible?nLmLights:0,ribbons:!!(ribbon&&ribbonGroup.visible),tramos:TRAF?TRAF.size:0,tramosState,bikeStations:BIKE&&BIKE.estaciones?BIKE.estaciones.length:0,bars:!!(bars&&bikeGroup.visible),wxM1:wxM1.visible,wxM2:wxM2.visible,manifest:!manifestErr,capas:manifest&&manifest.capas?Object.fromEntries(Object.entries(manifest.capas).map(([k,c])=>[k,c.estado||''])):{},cars:nCars,stopped:nStopped,parked:nParked,buses:nBuses,busAll:nBusAll,tram:nTram,tramAll:nTramAll,tramWait:nTramWait,tramState,busLight:nBusLight,busJunc:nBusJunc,cyc:nCyc,cycLight:nCycLight,peds:nPed,pedWait:nPedWait,pedTarget,calzada:calzState,metro:nMetroAll,red:redState,bus:busState,bici:bkState,err:simErr,loadErr:{...LOADERR}}),get RED(){return RED;},get cand(){return cand;},get area(){return area;},get candTot(){return candTot;},get RC(){return RC;},get RB(){return RB;},get TRAF(){return TRAF;},get busActive(){return busActive;},get cycs(){return cycs;},get cyc(){ return {bkState,queue:cycQueue.length,cycs:cycs.length,area:cycArea,bike:!!BIKE,seen:cycSeen,ev:BIKE&&BIKE.eventos&&BIKE.eventos.length,rbc:!!RBC,cerca:cycs.filter(c=>c.x!==undefined).map(c=>[c.x,c.z,Math.hypot(c.x-cycArea.x,c.z-cycArea.z)]).sort((a,b)=>a[2]-b[2]).slice(0,3)}; },busXY(tr){ const o=new Float32Array(4); busPos(tr,secNow(),o); return [o[0],o[1]]; }};   // inspección
 // Todo lo que hace falta para acercarse sin sorpresas se carga ya, y index.html mantiene la pantalla de carga hasta que
 // termine (antes, si se hacía zoom en los primeros segundos, coches y personas arrancaban con datos a medio cargar)
 K.listo=Promise.all([poll(),
-  redState==='none'?loadRed():null, busState==='none'?loadBuses():null, bkState==='none'?loadBici():null,
+  redState==='none'?loadRed():null, busState==='none'?loadBuses():null, bkState==='none'?loadBici():null, tramState==='none'?loadTram():null,
   ON.personas&&calzState==='none'?loadCalzada():null]).catch(e=>console.warn('vivo: carga inicial',e));
 setInterval(poll,POLL_MS); setInterval(panel,15000);
 })();

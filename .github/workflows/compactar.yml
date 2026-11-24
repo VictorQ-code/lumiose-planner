@@ -1,6 +1,7 @@
 # Compactación nocturna del histórico de Lumiose Planner (ver pipeline/compactar_nube.py).
 # Cada noche junta las capturas sueltas que el Worker guarda en R2 en días, semanas, meses, años y décadas,
-# y deja en el repositorio un resumen (data/gold/barcelona/historico.json). Ese commit diario también evita que
+# deja en el repositorio un resumen (data/gold/barcelona/historico.json) y rehace el horario del tranvía
+# (data/gold/barcelona/vivo/tranvia.json). Ese commit diario también evita que
 # GitHub pare la tarea programada por falta de actividad.
 # Secretos del repositorio (Settings → Secrets and variables → Actions): R2_ACCESS_KEY_ID y R2_SECRET_ACCESS_KEY.
 name: Compactar histórico
@@ -38,7 +39,7 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
-        run: pip install "pyarrow>=14" "boto3>=1.34"
+        run: pip install "pyarrow>=14" "boto3>=1.34" "requests>=2.31"
 
       - name: Compactar
         env:
@@ -53,13 +54,20 @@ jobs:
             python pipeline/compactar_nube.py
           fi
 
-      - name: Guardar el resumen en el repositorio
+      # TRAM publica unas 4-5 semanas de horario por delante: se rehace cada noche para que nunca se acabe
+      - name: Horario del tranvía
+        if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.prueba) }}
+        continue-on-error: true
+        env:
+          PYTHONIOENCODING: utf-8
+        run: python pipeline/tranvia.py
+
+      - name: Guardar el resumen y el horario del tranvía en el repositorio
         if: ${{ always() && !(github.event_name == 'workflow_dispatch' && inputs.prueba) }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          [ -f data/gold/barcelona/historico.json ] || exit 0
-          git add data/gold/barcelona/historico.json
+          for f in data/gold/barcelona/historico.json data/gold/barcelona/vivo/tranvia.json; do [ -f "$f" ] && git add "$f"; done
           if git diff --cached --quiet; then echo "sin cambios"; exit 0; fi
-          git commit -m "Histórico: resumen de la compactación nocturna"
+          git commit -m "Histórico y horario del tranvía: actualización nocturna"
           git pull --rebase --quiet && git push
