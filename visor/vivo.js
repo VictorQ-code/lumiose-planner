@@ -939,7 +939,7 @@ function wxTarget(){
   const c=d.codigo||0, mm=d.precipitacion_mm||d.lluvia_mm||0;
   const isRain=(c>=51&&c<=67)||(c>=80&&c<=82)||c>=95, isSnow=(c>=71&&c<=77)||c===85||c===86, isFog=c===45||c===48;
   const elev=S.elev!==undefined?S.elev:sunElev(new Date());
-  return {cloud:isFog?0.6:Math.min(1,(d.nubes||0)/100), rain:isRain?Math.min(1,(c<=57?0.3:0.5)+mm/8):0, snow:isSnow?Math.min(1,0.45+mm/4):0,
+  return {cloud:isFog?1:Math.min(1,(d.nubes||0)/100),           // con niebla, cielo cubierto liso: el velo ya tapa las nubes (y el ruido es caro) rain:isRain?Math.min(1,(c<=57?0.3:0.5)+mm/8):0, snow:isSnow?Math.min(1,0.45+mm/4):0,
     fog:isFog?1:0, storm:c>=95?1:0, dark:sstep(3,-9,elev), golden:sstep(-5,1,elev)*(1-sstep(4,16,elev)),
     lights:Math.max(sstep(-0.5,-6,elev),isFog?0.85:0,isSnow?0.75:0,c>=95?0.6:0,isRain?0.3*Math.min(1,(d.nubes||0)/100):0),
     sway:sstep(8,60,d.viento_kmh||0)*0.7, wind:d.viento_kmh||0, wdir:d.viento_dir||0, elev, desc:d.descripcion||WX&&WX.descripcion||''}; }
@@ -959,14 +959,22 @@ const wxMul=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthW
   vertexShader:WX_V,
   fragmentShader:`uniform float time,cloud,dark,golden,rain,snow,slant,sp,hatchOn,lit; uniform vec2 off; uniform vec3 ink; uniform vec4 lmL[32]; ${WX_GLSL} ${HATCH}
     void main(){ vec3 m=vec3(1.);
+      // Solo se compila lo que hace falta (W_NUBES, W_FOCOS): en la gráfica integrada (Direct3D vía ANGLE) los if
+      // se ejecutan enteros aunque no se cumplan, y el ruido de las nubes y el bucle de focos costaban ~12 ms por fotograma
+      #ifdef W_NUBES
       if(cloud>0.96){ m*=vec3(0.86,0.84,0.83)*(1.-0.05*cloud); }
-      else if(cloud>0.01){ vec2 w=ground(); float n=fbm((w+off)/1500.);
+      else { vec2 w=ground(); float n=fbm((w+off)/1500.);
         float thr=mix(0.80,0.30,cloud), c=smoothstep(thr,thr+0.14,n)*min(1.,cloud*1.8);
         float h=hatchOn>0.5?hatch(w,0.785,0.11,sp*1.15):0.;
         m*=mix(vec3(1.),vec3(0.82,0.79,0.77),c); m=mix(m,m*ink*2.0,h*c*0.45); m*=1.-0.05*cloud; }
+      #else
+      m*=vec3(0.86,0.84,0.83)*(1.-0.05*cloud)*step(0.01,cloud)+vec3(1.-step(0.01,cloud));   // cubierto (o nada): un tinte plano
+      #endif
       m*=mix(vec3(1.),vec3(1.,0.84,0.66),golden*0.5);
       float fl=0.;                                                            // monumentos con focos: su fachada y su entorno no se apagan
-      if(lit>0.01){ vec2 w=ground(); for(int i=0;i<32;i++){ vec4 l=lmL[i]; if(l.z<=0.) break; fl=max(fl,smoothstep(l.z,l.z*0.45,distance(w,l.xy))); } fl*=lit; }
+      #ifdef W_FOCOS
+      { vec2 w=ground(); for(int i=0;i<32;i++){ vec4 l=lmL[i]; if(l.z<=0.) break; fl=max(fl,smoothstep(l.z,l.z*0.45,distance(w,l.xy))); } fl*=lit; }
+      #endif
       m*=mix(vec3(1.),vec3(0.60,0.64,0.80),dark*0.85*(1.-fl*0.9));
       m*=mix(vec3(1.),vec3(1.,0.93,0.80),fl*dark*0.6);
       if(rain>0.01) m*=mix(vec3(1.),vec3(0.86,0.87,0.90),rain);
@@ -992,16 +1000,22 @@ const wxMix=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthW
       if(hash(id+seed)>0.62) return 0.; vec2 c=sc*vec2(0.2+0.6*hash(id+2.+seed),0.2+0.6*hash(id+4.+seed));
       return 1.-smoothstep(r*0.4,r,length(f-c)); }
     void main(){ float a=0.; vec3 col=paper;
-      if(fog>0.01){ vec2 w=ground(); float n=fbm(w/700.+vec2(time*0.012,time*0.004)); a=fog*(0.28+0.30*(vN.y*0.5+0.5)+0.30*n); }
-      if(snow>0.01){ vec2 p=gl_FragCoord.xy/dpr;
+      #ifdef W_NIEBLA
+      { vec2 w=ground(); float n=fbm(w/700.+vec2(time*0.012,time*0.004)); a=fog*(0.28+0.30*(vN.y*0.5+0.5)+0.30*n); }
+      #endif
+      #ifdef W_NIEVE
+      { vec2 p=gl_FragCoord.xy/dpr;
         vec2 q1=p+vec2(sin(time*0.7+p.y*0.012)*7.+slant*time*80.,time*46.), q2=p*1.55+vec2(sin(time*0.9+p.y*0.02+2.)*5.+slant*time*60.,time*48.);
         float f=max(texture2D(snowTex,q1/vec2(256.,512.)).r,0.8*texture2D(snowTex,q2/vec2(256.,512.)+0.37).r);
         a=max(a,f*snow*0.95); col=mix(col,vec3(1.,0.99,0.97),f); }
-      if(rain>0.01){ vec2 p=gl_FragCoord.xy/dpr;
+      #endif
+      #ifdef W_LLUVIA
+      { vec2 p=gl_FragCoord.xy/dpr;
         float sn=sin(slant), cs=cos(slant); vec2 q=vec2(cs*p.x+sn*p.y,-sn*p.x+cs*p.y);
         float s=texture2D(rainTex,(q+vec2(0.,time*1150.))/vec2(256.,512.)).r
                +0.6*texture2D(rainTex,(q*1.6+vec2(91.,time*1250.))/vec2(256.,512.)+0.5).r*step(0.5,rain);
         s=clamp(s,0.,1.)*(0.45+0.55*rain); a=max(a,s*0.85); col=mix(col,vec3(0.97,0.97,0.95),s); }
+      #endif
       if(flash>0.){ a=max(a,flash*0.6); col=mix(col,vec3(1.),flash*0.5); }
       if(a<0.004) discard;
       gl_FragColor=vec4(col,clamp(a,0.,0.9)); }`});
@@ -1045,6 +1059,8 @@ const wxQuad=new THREE.PlaneGeometry(2,2);
 const wxM1=new THREE.Mesh(wxQuad,wxMul), wxM2=new THREE.Mesh(wxQuad,wxMix);
 wxM1.frustumCulled=wxM2.frustumCulled=false; wxM1.renderOrder=990; wxM2.renderOrder=991; wxM1.visible=wxM2.visible=false; root.add(wxM1,wxM2);
 const _wa=new THREE.Vector3(), _wb=new THREE.Vector3();
+function setDefs(mat,want){ const d={}; let key=''; for(const k in want) if(want[k]){ d[k]=''; key+=k+','; }
+  if(mat.userData.defKey!==key){ mat.userData.defKey=key; mat.defines=d; mat.needsUpdate=true; } }
 function wxStep(now,dt,mpp){
   if(!ON.tiempo){ wxM1.visible=wxM2.visible=false; if(lamps) lamps.visible=false; if(K.U.wind) K.U.wind.value.z=0; return false; }
   if(!wxT||now-(wxStep.tt||0)>5000){ wxT=wxTarget(); wxStep.tt=now; }
@@ -1070,6 +1086,9 @@ function wxStep(now,dt,mpp){
   if(WXV.lights>0.005){ if(!lamps&&RED) buildLamps(); else if(!RED&&redState==='none') loadRed(); }
   if(!wxStep.lm&&K.LMS){ wxStep.lm=1; K.LMS.slice(0,32).forEach((l,i)=>{ const a=l.axis||{}; u.lmL.value[i].set(l.x,l.z,Math.max(25,(Math.max(a.len||0,a.wid||0))*0.6+(l.spire_h||l.body_h||20)*0.9),1); }); }
   u.lit.value=WXV.lights;
+  // versión del shader con solo lo necesario (cada combinación se compila una vez y se reutiliza)
+  setDefs(wxMul,{W_NUBES:WXV.cloud>0.01&&WXV.cloud<=0.96, W_FOCOS:WXV.lights>0.01&&WXV.dark>0.01});
+  setDefs(wxMix,{W_NIEBLA:WXV.fog>0.01, W_NIEVE:WXV.snow>0.01, W_LLUVIA:WXV.rain>0.01});
   if(lamps){ lamps.visible=WXV.lights>0.005; lampMat.uniforms.L.value=WXV.lights; lampMat.uniforms.fog.value=Math.max(WXV.fog,WXV.snow*0.5); lampMat.uniforms.night.value=Math.max(WXV.dark,WXV.storm*0.4); }
   // repintado: lluvia, nieve y relámpagos a 60 fps; nubes y árboles mecidos, a 12–30 fps (el resto del tiempo el visor descansa)
   const fast=WXV.rain>0.01||WXV.snow>0.01||flashV>0||moving, sway=WXV.sway>0.05&&mpp<1.3, slow=WXV.cloud>0.05||WXV.fog>0.01;
