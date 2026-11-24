@@ -40,8 +40,16 @@ async function bicing(env, d, min) {
   await guardar(env, 'bicing', d, await pedir(feeds.station_status));
   if (min % 360 === 0) await guardar(env, 'bicing_info', d, await pedir(feeds.station_information));   // datos fijos, cada 6 h
 }
-async function trafico(env, d) { await guardar(env, 'trafico', d, await pedir(TRAFICO)); }
-async function tiempo(env, d) { await guardar(env, 'tiempo', d, await pedir(TIEMPO)); }
+// Open Data BCN rechaza a ratos (403) las peticiones que salen de Cloudflare, y Open-Meteo a veces da 503:
+// hasta 3 intentos con una pequeña pausa (esperar no gasta procesador)
+async function pedirConReintentos(url, n = 3) {
+  for (let i = 1; ; i++) {
+    try { return await pedir(url); }
+    catch (e) { if (i >= n) throw e; await new Promise(r => setTimeout(r, 1500 * i)); }
+  }
+}
+async function trafico(env, d) { await guardar(env, 'trafico', d, await pedirConReintentos(TRAFICO)); }
+async function tiempo(env, d) { await guardar(env, 'tiempo', d, await pedirConReintentos(TIEMPO)); }
 
 // iBus: próximas llegadas en 25 paradas de control, por turnos (el turno sale del minuto: no hace falta guardar estado)
 function llegadas(j, out) {
@@ -85,13 +93,15 @@ const JSON_H = { 'content-type': 'application/json; charset=utf-8', 'access-cont
 export default {
   async scheduled(event, env, ctx) {
     const d = new Date(event.scheduledTime), min = Math.floor(event.scheduledTime / 60000);
-    const tareas = { bicing: () => bicing(env, d, min) };
-    if (min % 5 === 0) tareas.trafico = () => trafico(env, d);
-    if (min % 15 === 0) tareas.tiempo = () => tiempo(env, d);
-    if (min % 2 === 0 && env.TMB_APP_ID && env.TMB_APP_KEY) tareas.bus = () => ibus(env, d, min);
-    const nombres = Object.keys(tareas), res = await Promise.allSettled(nombres.map(k => tareas[k]()));
     // Estado de cada fuente (lo enseña /api/estado): última captura buena y último error
     const prev = await env.DATOS.get('estado.json'), estado = prev ? await prev.json() : {};
+    // Le toca si ha pasado su periodo desde la última captura buena: si una falla, se reintenta al minuto siguiente
+    const toca = (k, cada) => { const ok = estado[k] && Date.parse(estado[k].ok); return min % cada === 0 || !ok || d.getTime() - ok > (cada - 0.5) * 60000; };
+    const tareas = { bicing: () => bicing(env, d, min) };
+    if (toca('trafico', 5)) tareas.trafico = () => trafico(env, d);
+    if (toca('tiempo', 15)) tareas.tiempo = () => tiempo(env, d);
+    if (min % 2 === 0 && env.TMB_APP_ID && env.TMB_APP_KEY) tareas.bus = () => ibus(env, d, min);
+    const nombres = Object.keys(tareas), res = await Promise.allSettled(nombres.map(k => tareas[k]()));
     nombres.forEach((k, i) => {
       const e = estado[k] || (estado[k] = {});
       if (res[i].status === 'fulfilled') { e.ok = d.toISOString(); e.capturas = (e.capturas || 0) + 1; }
