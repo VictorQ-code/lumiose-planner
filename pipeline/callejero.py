@@ -75,8 +75,7 @@ def main() -> None:
     # solo calles del término municipal de Barcelona (la red incluye trozos de L'Hospitalet, Badalona…, con nombres
     # repetidos como «Carrer d'Espanya» o «Carrer de Marina»): la mayoría de sus tramos dentro del contorno de la ciudad
     idx = json.loads((GOLD / "barcelona" / "index.json").read_text(encoding="utf-8"))
-    anillos = idx.get("outlines") or [idx["outline"]]
-    anillos = [a for a in anillos if a and isinstance(a[0], (list, tuple))] or [idx["outline"]]
+    anillos = [idx["outline"]]                    # contorno de la ciudad (outlines lleva además otros que se solapan)
 
     def dentro(x, z):
         n = 0
@@ -91,12 +90,44 @@ def main() -> None:
         k = (len(p) // 4) * 2
         return p[k], p[k + 1]
 
-    fuera = [k for k, v in calles.items() if sum(dentro(*medio(i)) for i in v) * 2 < len(v)]
-    for k in fuera:
-        del calles[k]
-    log(f"{len(fuera):,} calles fuera de Barcelona descartadas")
+    # Un mismo nombre puede ser varias calles (la «Plaça d'Espanya» de Barcelona y la de otro municipio): se separa en
+    # trozos conectados (tramos que comparten cruce, o a menos de 150 m: calzadas desdobladas, plazas) y cada trozo va aparte
+    def trozos(ed):
+        padre = list(range(len(ed)))
+
+        def raiz(i):
+            while padre[i] != i:
+                padre[i] = padre[padre[i]]
+                i = padre[i]
+            return i
+        por_nodo = defaultdict(list)
+        for k, i in enumerate(ed):
+            por_nodo[red["tramos"][i][0]].append(k)
+            por_nodo[red["tramos"][i][1]].append(k)
+        for ks in por_nodo.values():
+            for k in ks[1:]:
+                padre[raiz(k)] = raiz(ks[0])
+        mids = [medio(i) for i in ed]
+        for a in range(len(ed)):
+            for b in range(a + 1, len(ed)):
+                if raiz(a) != raiz(b) and math.hypot(mids[a][0] - mids[b][0], mids[a][1] - mids[b][1]) < 150:
+                    padre[raiz(b)] = raiz(a)
+        grupos = defaultdict(list)
+        for k, i in enumerate(ed):
+            grupos[raiz(k)].append(i)
+        return list(grupos.values())
+
+    lista, fuera = [], 0
+    for nombre, ed in calles.items():
+        for g in trozos(ed):
+            if sum(dentro(*medio(i)) for i in g) * 2 >= len(g):
+                lista.append([nombre, g])
+            else:
+                fuera += 1
+    log(f"{fuera:,} trozos de calle fuera de Barcelona descartados")
     out = {"version": 1, "generado": time.strftime("%Y-%m-%dT%H:%M:%S"), "fuente": "OpenStreetMap (nombres de calle)",
-           "tramos": n_tramos, "calles": sorted([k, v] for k, v in calles.items())}
+           "tramos": n_tramos, "calles": sorted(lista)}
+    calles = {n: g for n, g in lista}                                     # solo para el recuento de abajo
     SALIDA.write_text(json.dumps(out, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
     con = sum(len(v) for v in calles.values())
     log(f"{len(calles):,} calles con nombre · {con:,} de {n_tramos:,} tramos ({con / n_tramos:.0%}) · "
