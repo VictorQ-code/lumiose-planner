@@ -1491,7 +1491,9 @@ let IR=null;                                        // renderers de las piezas (
 function incRenderers(){ if(IR) return IR; IR={};
   for(const k in PROP) IR[k]=makeRenderer({name:k,w:0,len:2,parts:PROP[k],low:PROP[k]},120);
   IR.coche=makeRenderer(CAR_MODELS[1],20); IR.utilitario=makeRenderer(CAR_MODELS[0],20); IR.gente=makeRenderer(PED_MODELS[0],160); IR.gente2=makeRenderer(PED_MODELS[1],160);
+  for(const k in IR) incGroup.add(...IR[k].hi,...IR[k].lo);                    // fuera del grupo de los coches (que se oculta a ratos)
   return IR; }
+const incGroup=new THREE.Group(); root.add(incGroup);
 // balizas: ámbar que parpadea (obras, intermitentes) y azul/rojo alternos (policía)
 const beaconMat=new THREE.ShaderMaterial({ transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
   uniforms:{time:{value:0},mpp:U.mpp,dpr:{value:1}},
@@ -1752,6 +1754,12 @@ function frame(now,dt){
   const mpp=K.mppNow();
   VSC=Math.min(1.8,Math.max(1,mpp/1.1));
   const wxAnim=wxStep(now,dt,mpp);
+  // incidencias: lo primero y por separado (tienen su propio grupo): un fallo en otra capa no las deja ocultas
+  let incA=false;
+  try{ if(INC_DEMO&&!incReady&&RED&&tramState!=='loading'&&tramState!=='none'){ incReady=true; incDemo(); }
+    if(!INC_DEMO&&RED&&now-incLast>120000){ incLast=now; loadIncidencias(); }     // avisos reales del Ayuntamiento, cada 2 min
+    incGroup.visible=INCS.length>0; incA=INCS.length?incStep(now,dt,mpp):false; }
+  catch(e){ if(!simErr){ simErr='incidencias: '+String(e&&e.stack||e).slice(0,280); console.error('vivo:',e); panel(); } }
   ribbonGroup.visible=ON.trafico&&!!ribbon; ribbonMat.uniforms.w.value=mpp*2.2; ribbonMat.uniforms.op.value=mpp<0.8?0.35:0.9;
   bikeGroup.visible=ON.bicing&&!!bars;
   let anim=false;
@@ -1776,9 +1784,6 @@ function frame(now,dt){
   { const hi=mpp<HI_MPP; for(const r of [...(RC||[]),...(RB||[]),...(RP||[]),...(RBC||[]),...(RT?[RT]:[])]){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   if(RP&&mpp>=PARK_MPP) for(const r of RP){ for(const im of r.hi) im.visible=false; for(const im of r.lo) im.visible=false; }
   if(PEDR){ const hi=mpp<PED_HI; for(const r of PEDR){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
-  if(INC_DEMO&&!incReady&&RED&&tramState!=='loading'&&tramState!=='none'){ incReady=true; incDemo(); }
-  if(!INC_DEMO&&RED&&now-incLast>120000){ incLast=now; loadIncidencias(); }       // avisos reales del Ayuntamiento, cada 2 min
-  const incA=INCS.length?incStep(now,dt,mpp):false;
   anim=anim||cyc||ped||incA;
   vehGroup.visible=anim; if(!anim||!BUS) hideBusLabels();
   if(now-lastPanel>2000){ lastPanel=now; if(anim||redState==='loading') panel(); }

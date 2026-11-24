@@ -907,7 +907,9 @@ function frameTo(points,fill){
   const a=innerWidth/innerHeight; cam.zoom=Math.min(H*a*(fill||0.9)/hw, H*0.78*(fill||0.9)/0.9/hh); cam.updateProjectionMatrix();
   lastMove=performance.now(); dirty=true;
 }
-function frame(){ cam.position.copy(controls.target).addScaledVector(DIR,CAMDIST); frameTo(allPts,0.92); }
+// alejarse como mucho un poco más que la ciudad entera (antes se podía hasta dejarla como un punto en medio de la nada)
+function frame(){ cam.position.copy(controls.target).addScaledVector(DIR,CAMDIST); frameTo(allPts,0.92);
+  if(CITY) controls.minZoom=Math.max(0.02,cam.zoom*0.7); }
 $('bHome').onclick=frame;
 // Botones solo del móvil: minimapa y panel «En vivo» (lo crea vivo.js con id="vivo")
 $('bMini').onclick=()=>{ const on=document.body.classList.toggle('mini-on'); $('bMini').setAttribute('aria-pressed',String(on)); dirty=true; };
