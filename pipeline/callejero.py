@@ -72,6 +72,29 @@ def main() -> None:
     if len(red["tramos"]) != n_tramos or any(red["tramos"][k][6][:4] != primeros[k][:4] for k in range(len(primeros))):
         raise SystemExit(f"El callejero no coincide con red.json ({n_tramos} tramos frente a {len(red['tramos'])}): "
                          "rehaz antes la red con pipeline/red_viaria.py")
+    # solo calles del término municipal de Barcelona (la red incluye trozos de L'Hospitalet, Badalona…, con nombres
+    # repetidos como «Carrer d'Espanya» o «Carrer de Marina»): la mayoría de sus tramos dentro del contorno de la ciudad
+    idx = json.loads((GOLD / "barcelona" / "index.json").read_text(encoding="utf-8"))
+    anillos = idx.get("outlines") or [idx["outline"]]
+    anillos = [a for a in anillos if a and isinstance(a[0], (list, tuple))] or [idx["outline"]]
+
+    def dentro(x, z):
+        n = 0
+        for r in anillos:
+            for (x0, z0), (x1, z1) in zip(r, r[1:] + r[:1]):
+                if (z0 > z) != (z1 > z) and x < x0 + (z - z0) * (x1 - x0) / (z1 - z0):
+                    n += 1
+        return n % 2 == 1
+
+    def medio(i):
+        p = red["tramos"][i][6]
+        k = (len(p) // 4) * 2
+        return p[k], p[k + 1]
+
+    fuera = [k for k, v in calles.items() if sum(dentro(*medio(i)) for i in v) * 2 < len(v)]
+    for k in fuera:
+        del calles[k]
+    log(f"{len(fuera):,} calles fuera de Barcelona descartadas")
     out = {"version": 1, "generado": time.strftime("%Y-%m-%dT%H:%M:%S"), "fuente": "OpenStreetMap (nombres de calle)",
            "tramos": n_tramos, "calles": sorted([k, v] for k, v in calles.items())}
     SALIDA.write_text(json.dumps(out, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")

@@ -1627,18 +1627,24 @@ const VACIAS=new Set(['carrer','c','cl','avinguda','av','avda','passeig','pg','p
 const tokens=s=>(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[´'’`·]/g,' ').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w&&!VACIAS.has(w));
 async function loadCallejero(){ callState='loading';
   try{ const d=await fetch(VIVO+'callejero.json',{cache:'no-cache'}).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); });
-    CALL=d.calles.map(([nom,ed])=>({nom,tok:new Set(tokens(nom)),ed})); callState='ready'; okLoad('callejero'); }
+    CALL=d.calles.map(([nom,ed])=>({nom,tok:new Set(tokens(nom)),tv:tipoVia(nom),ed})); callState='ready'; okLoad('callejero'); }
   catch(e){ callState='missing'; retryLater('callejero',()=>{ if(callState==='missing') callState='none'; },e); } }
 // calles cuyo nombre contiene todas las palabras del aviso (primero las que coinciden exactamente)
-function calles(nombre){ const t=tokens(nombre); if(!t.length) return [];
-  const r=CALL.filter(c=>t.every(w=>c.tok.has(w))); r.sort((a,b)=>(a.tok.size-t.length)-(b.tok.size-t.length)); return r.slice(0,6); }
+// tipo de vía (carrer, plaça, avinguda…) a partir de la primera palabra, abreviada o no
+const TIPO_VIA={c:'carrer',cl:'carrer',carrer:'carrer',av:'avinguda',avda:'avinguda',avinguda:'avinguda',pg:'passeig',passeig:'passeig',pl:'placa',placa:'placa',
+  rda:'ronda',ronda:'ronda',trav:'travessera',travessera:'travessera',rbla:'rambla',rambla:'rambla',gran:'gran',ptge:'passatge',passatge:'passatge'};
+const tipoVia=s=>TIPO_VIA[((s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').match(/[a-z]+/)||[''])[0]]||'';
+function calles(nombre){ const t=tokens(nombre); if(!t.length) return []; const tv=tipoVia(nombre);
+  const r=CALL.filter(c=>t.every(w=>c.tok.has(w)));
+  const nota=c=>(c.tok.size-t.length)*10+(tv&&c.tv!==tv?5:0)-Math.min(4,c.ed.length/15);   // nombre exacto, mismo tipo, calle larga
+  r.sort((a,b)=>nota(a)-nota(b)); return r.slice(0,6); }
 const nodosDe=c=>{ const s=new Set(); for(const i of c.ed){ s.add(RED.E[i].a); s.add(RED.E[i].b); } return s; };
 // cruce de dos calles: nodo común, o el par de nodos más cercano a menos de 60 m (plazas, calzadas desdobladas)
 function cruce(A,B){
   for(const a of A) for(const b of B){ const nb=nodosDe(b); for(const n of nodosDe(a)) if(nb.has(n)) return {calle:a,nodo:n}; }
   let best=null;
   for(const a of A) for(const b of B){ const nb=[...nodosDe(b)];
-    for(const n of nodosDe(a)) for(const m of nb){ const d=Math.hypot(RED.nx[n]-RED.nx[m],RED.nz[n]-RED.nz[m]); if(d<60&&(!best||d<best.d)) best={calle:a,nodo:n,d}; } }
+    for(const n of nodosDe(a)) for(const m of nb){ const d=Math.hypot(RED.nx[n]-RED.nx[m],RED.nz[n]-RED.nz[m]); if(d<90&&(!best||d<best.d)) best={calle:a,nodo:n,d}; } }
   return best; }
 const SENTIT={muntanya:[-0.71,-0.71],mar:[0.71,0.71],besos:[0.71,-0.71],llobregat:[-0.71,0.71]};
 // tramo de la calle que llega al nodo (en el sentido del aviso si lo dice): la escena queda justo antes del cruce
