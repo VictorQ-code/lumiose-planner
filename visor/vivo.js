@@ -273,7 +273,8 @@ const offScreen=(x,z)=>{ _p.set(x,Y0,z).project(K.cam); return Math.abs(_p.x)>1.
 function wpick(arr){ let s=0; for(const m of arr) s+=m.model.w; let x=Math.random()*s; for(const m of arr){ x-=m.model.w; if(x<=0) return m; } return arr[0]; }
 function chooseNext(v){
   const E=RED.E, e=E[v.e], end=v.dir?e.a:e.b, opts=RED.out[end], rev=v.e*2+(v.dir?0:1);
-  const ok=opts.filter(p=>p!==rev&&(!v.bus||E[p>>1].cls<=5));
+  let ok=opts.filter(p=>p!==rev&&(!v.bus||E[p>>1].cls<=5));
+  if(INC_CERRADA.size&&ok.length>1){ const abiertas=ok.filter(p=>!INC_CERRADA.has(p>>1)); if(abiertas.length) ok=abiertas; }   // calle cortada: se desvían
   if(ok.length) return ok[(Math.random()*ok.length)|0];
   return opts.includes(rev)?rev:-1;          // calle sin salida: media vuelta si es de doble sentido
 }
@@ -286,6 +287,7 @@ function spawn(v,anywhere){
     if(!anywhere&&t<12&&!offScreen(e.c[2*i],e.c[2*i+1])) continue;
     if(TRAM&&tramCerca(e.c[2*i],e.c[2*i+1],3)) continue;                    // nunca aparece encima de la vía del tranvía
     const lane=Math.floor(Math.random()*lanesDir(e)), l=lanesMap.get((ei*2+dir)*8+lane);
+    if(INC_OBS.size&&incDentro(ei,dir,lane,s)) continue;                    // ni dentro ni justo al lado de una incidencia
     if(l&&l.some(o=>Math.abs(o.s-s)<(o.len+v.len)/2+4)) continue;
     Object.assign(v,{e:ei,dir,s,lane,age:0,fade:-1,wait:0,ahead:null});
     v.v=speed(e)*v.k*0.7; v.next=chooseNext(v);
@@ -384,6 +386,7 @@ function drive(v,dt){
     if(h){ const g=h[0]-(h[1].len+L)/2; if(g<gap){ gap=g; dv=v.v-h[1].v; } } }
   if(v.px!==undefined&&TRAM){ const g=tramParar(v.px,v.pz,Math.cos(v.ang),-Math.sin(v.ang),Math.max(25,v.v*v.v/(2*B_DEC)+L+12),L,gap);   // tranvía: prioridad
     if(g>=0&&g<gap){ gap=g; dv=v.v; if(g<8) nTramWait++; } }
+  if(INC_OBS.size){ const g=incGap(v,L,rem); if(g<gap){ gap=g; dv=v.v; } }            // incidencia: cola detrás, sin atravesarla
   const a=v.bus?A_BUS:A_CAR, ss=S0+Math.max(0,v.v*T_HW+v.v*dv/(2*Math.sqrt(a*B_DEC)));
   let acc=a*(1-Math.pow(v.v/v0,4)-(gap<1e8?(ss/Math.max(gap,0.05))**2:0));
   v.v=Math.max(0,v.v+Math.max(acc,-9)*dt);
@@ -511,6 +514,7 @@ function busStep(now,dt){
       if(g>=0&&adv>g){ stop=true; nBusLight++; }
       if(!stop&&TRAM){ const L=r.model.len, gt=tramParar(tr.px,tr.pz,Math.cos(da),Math.sin(da),half+40,L,blk?blk[0]-blk[1].len/2-half:undefined);   // tranvía: prioridad
         if(gt>=0&&adv>gt){ stop=true; nTramWait++; } }
+      if(!stop&&INCS.length){ const gi=incBus(tr.px,tr.pz,da,half); if(gi>=0&&adv>gi) stop=true; }        // incidencia en su carril: espera
       if(!stop){ const j=nodeAhead(RED.jgrid,tr.px,tr.pz,da,half+12,6);         // cruce sin semáforo ocupado por un coche
         if(j){ const o=busy.get(j[1]); if(o&&o!==tr&&!o.trip&&(tr.jw||0)<5&&adv>j[0]-half-STOPLINE){ stop=true; nBusJunc++; tr.jw=(tr.jw||0)+dt; } else if(!o) tr.jw=0; } } }
     if(stop){ tr.hold=Math.min(300,(tr.hold||0)+dt); if(tr.px!==undefined){ out[0]=tr.px; out[1]=tr.pz; out[2]=tr.pa; } }
@@ -1457,6 +1461,193 @@ function panel(){
     ${row('bus',bs,false)}${row('metro',mt,false)}${row('personas',pr,true)}${wx}${note}</div>`;
 }
 
+/* ================= Incidencias de tráfico: pequeñas escenas animadas en la calle ================= */
+// Cada tipo (obras, accidente, manifestación, calle cortada, avería) es un grupo de piezas con el mismo dibujo que los
+// vehículos, balizas que parpadean (un único dibujado de puntos) y, de lejos, un aviso con su icono a tinta que late.
+// La incidencia ocupa sus carriles: los coches hacen cola detrás (no la atraviesan) y evitan las calles cortadas.
+// De momento solo en demostración: ?demo=incidencias pone una de cada tipo junto a Passeig de Gràcia.
+const INC_DEMO=/[?&]demo=incidencias/.test(location.search);
+const ORANGE=0xd9773a, GU_BLUE=0x3d5f9a;
+function valla(){ const P=[...both(s=>[bx(-.05,.05,0,1.05,.06,0).translate(s*0.95,0,0),C.gray])];        // tanca de obra roja y blanca
+  for(let i=0;i<6;i++) P.push([bx(-0.95+i*0.317,-0.95+(i+1)*0.317,.45,.95,.04),i%2?C.white:C.red]);
+  return [...P,...both(s=>[bx(-.25,.25,0,.08,.3).translate(s*0.95,0,0),C.dark,.8])]; }
+function cono(){ return [[new THREE.ConeGeometry(.17,.62,8).translate(0,.37,0),ORANGE],[new THREE.CylinderGeometry(.115,.135,.1,8).translate(0,.36,0),C.white],[bx(-.2,.2,0,.06,.4),C.dark,.8]]; }
+function arena(){ return [[new THREE.ConeGeometry(1.2,.8,7).translate(0,.4,0),C.ochre,.9],[bx(-.9,.9,0,.5,.9).translate(1.6,0,.2),C.gray]]; }
+function urbana(){ const W=1.8; return [...berlina(C.white), [bx(-2.36,2.36,.55,.72,W+.03),GU_BLUE], [bx(-.45,.35,1.48,1.62,1.25),C.dark,.8]]; }
+function furgonUrbana(){ return [...furgoneta(C.white).filter(p=>p[1]!==C.ochre), [bx(-2.56,2.56,.6,.8,2.03),GU_BLUE], [bx(-.6,.4,2.5,2.64,1.3),C.dark,.8]]; }
+function triangulo(){ return [[prof([[-.3,.06],[.3,.06],[0,.58]],.05),C.red],[prof([[-.17,.15],[.17,.15],[0,.45]],.06),C.white],[bx(-.2,.2,0,.06,.25),C.dark]]; }
+function pancarta(){ return [...both(s=>[bx(-.03,.03,0,2.3,.05,0).translate(s*1.55,0,0),C.dark]), [bx(-1.5,1.5,1.35,2.2,.04),C.cream], [bx(-1.3,1.3,1.6,1.9,.05),C.wine,.9]]; }
+function bandera(){ return [[bx(-.025,.025,0,2.6,.05),C.dark],[bx(.03,.95,1.95,2.55,.03),BODY]]; }
+function desvio(){ return [[bx(-.04,.04,0,2.0,.06),C.gray],[new THREE.CylinderGeometry(.42,.42,.05,16).rotateX(Math.PI/2).translate(0,2.0,0),C.white],
+  [prof([[-.26,1.96],[.12,1.96],[.12,1.86],[.3,2.02],[.12,2.18],[.12,2.08],[-.26,2.08]],.06,.03),GU_BLUE]]; }
+const PROP={valla,cono,arena,urbana,furgonUrbana,triangulo,pancarta,bandera,desvio};
+let IR=null;                                        // renderers de las piezas (se crean al primer uso)
+function incRenderers(){ if(IR) return IR; IR={};
+  for(const k in PROP) IR[k]=makeRenderer({name:k,w:0,len:2,parts:PROP[k],low:PROP[k]},120);
+  IR.coche=makeRenderer(CAR_MODELS[1],20); IR.utilitario=makeRenderer(CAR_MODELS[0],20); IR.gente=makeRenderer(PED_MODELS[0],160); IR.gente2=makeRenderer(PED_MODELS[1],160);
+  return IR; }
+// balizas: ámbar que parpadea (obras, intermitentes) y azul/rojo alternos (policía)
+const beaconMat=new THREE.ShaderMaterial({ transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+  uniforms:{time:{value:0},mpp:U.mpp,dpr:{value:1}},
+  vertexShader:`uniform float time,mpp,dpr; attribute vec3 aC; attribute float aF; attribute float aPh; varying vec3 vC; varying float vA;
+    void main(){ gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); float c=fract(time*aF+aPh);
+      vA=aF>2.?step(0.5,c)*(0.6+0.4*step(0.75,c)):smoothstep(0.0,0.08,c)*smoothstep(0.55,0.45,c); vC=aC;
+      gl_PointSize=clamp(2.2/mpp,5.,26.)*dpr; }`,
+  fragmentShader:`varying vec3 vC; varying float vA; void main(){ float d=length(gl_PointCoord-.5)*2.; if(d>1.) discard;
+      gl_FragColor=vec4(vC*(exp(-d*d*3.)*0.9+smoothstep(.3,.05,d))*vA,1.); }`});
+// aviso de lejos: icono a tinta sobre papel con un anillo que late (atlas de 6 iconos dibujados en un canvas)
+function iconAtlas(){ const S=96, cv=document.createElement('canvas'); cv.width=S*6; cv.height=S; const g=cv.getContext('2d');
+  const ink='#3a2616', red='#a9483a';
+  for(let i=0;i<6;i++){ g.save(); g.translate(i*S+S/2,S/2);
+    g.fillStyle='#f3ead6'; g.strokeStyle=ink; g.lineWidth=3; g.beginPath(); g.arc(0,0,30,0,7); g.fill(); g.stroke();
+    g.strokeStyle=red; g.lineWidth=2; g.beginPath(); g.arc(0,0,35,0,7); g.stroke();
+    g.strokeStyle=ink; g.fillStyle=ink; g.lineWidth=3; g.lineCap=g.lineJoin='round'; g.beginPath();
+    if(i===0){ g.moveTo(-11,16); g.lineTo(0,-17); g.lineTo(11,16); g.closePath(); g.stroke(); g.fillStyle=red; g.fillRect(-7,-1,14,5); g.fillRect(-12,15,24,4); }   // obras: cono
+    if(i===1){ g.font='bold 40px Georgia,serif'; g.textAlign='center'; g.textBaseline='middle'; g.fillStyle=red; g.fillText('!',0,2); }                         // accidente
+    if(i===2){ for(const x of [-12,0,12]){ g.beginPath(); g.arc(x,-6+(x?4:0),5,0,7); g.fill(); g.fillRect(x-4,2+(x?4:0),8,12); } g.fillStyle=red; g.fillRect(-16,-22,32,8); }  // manifestación
+    if(i===3){ g.fillStyle=red; for(let k=0;k<4;k++) g.fillRect(-18+k*9,-6,5,12); g.strokeRect(-19,-7,38,14); g.moveTo(-15,7); g.lineTo(-15,17); g.moveTo(15,7); g.lineTo(15,17); g.stroke(); }  // cortada
+    if(i===4){ g.moveTo(-14,14); g.lineTo(8,-8); g.stroke(); g.beginPath(); g.arc(11,-11,8,0.6,5.6); g.stroke(); }                                       // avería: llave
+    if(i===5){ g.fillStyle=red; g.beginPath(); g.moveTo(0,-16); g.lineTo(-6,4); g.lineTo(6,4); g.closePath(); g.fill(); g.beginPath(); g.arc(0,12,3.5,0,7); g.fill(); }   // otra
+    g.restore(); }
+  const t=new THREE.CanvasTexture(cv); t.minFilter=THREE.LinearFilter; return t; }
+const avisoMat=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthWrite:false,
+  uniforms:{time:{value:0},atlas:{value:null},dpr:{value:1},op:{value:1}},
+  vertexShader:`uniform float time,dpr; attribute float aI; attribute float aPh; varying float vI; varying float vP;
+    void main(){ gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); vI=aI; vP=fract(time*0.6+aPh); gl_PointSize=58.*dpr; }`,
+  fragmentShader:`uniform sampler2D atlas; uniform float op; varying float vI; varying float vP;
+    void main(){ vec2 p=gl_PointCoord-.5; float r=length(p)*2.;
+      float ring=smoothstep(0.035,0.,abs(r-(0.55+0.45*vP)))*(1.-vP)*0.8;              // anillo que se abre y se apaga
+      vec2 uv=vec2((vI+0.5+p.x*1.35)/6.,0.5-p.y*1.35); vec4 ic=(abs(p.x)<0.37&&abs(p.y)<0.37)?texture2D(atlas,uv):vec4(0.);
+      vec3 col=mix(vec3(0.66,0.28,0.23),ic.rgb,ic.a); float a=max(ic.a,ring); if(a<0.02) discard; gl_FragColor=vec4(col,a*op); }`});
+const INC_TIPOS={obras:0,accidente:1,manifestacion:2,cortada:3,averia:4,otra:5};
+let INCS=[], incReady=false, beacons=null, avisos=null; const INC_OBS=new Map(), INC_CERRADA=new Set();
+const incLbl=[];
+// ---- obstáculo para los coches: tramo [s0,s1] (medido desde el nodo a) de la calle e, en el sentido dir (−1 = ambos) y carriles
+function incBloquea(e,dir,lanes,s0,s1){ let l=INC_OBS.get(e); if(!l) INC_OBS.set(e,l=[]); l.push({dir,lanes,s0,s1});
+  // puntos del obstáculo (para los buses, que no van por el grafo): a lo largo del tramo, en cada carril afectado
+  const E=RED.E[e], ln=lanesDir(E), pts=[], dirs=dir<0?[0,1]:[dir];
+  for(const d of dirs) for(let k=0;k<ln;k++){ if(lanes&&!lanes.includes(k)) continue; const off=E.one?(k-(ln-1)/2)*3.1:1.65+k*3.1;
+    for(let u=s0;u<=s1;u+=4){ edgePt(E,Math.max(0,Math.min(E.len,u)),d?-off:off,PQ); pts.push([PQ[0],PQ[1]]); } }
+  return pts; }
+function incGap(v,L,rem){ let g=1e9; const E=RED.E;
+  const mira=(ei,dir,lane,base,sNow)=>{ const l=INC_OBS.get(ei); if(!l) return; const e=E[ei];
+    for(const o of l){ if(o.dir>=0&&o.dir!==dir) continue; if(o.lanes&&!o.lanes.includes(lane)) continue;
+      const st=dir?e.len-o.s1:o.s0, en=dir?e.len-o.s0:o.s1; if(sNow>en) continue; const d=base+st-sNow-L/2-2; if(d<g) g=Math.max(0,d); } };
+  mira(v.e,v.dir,v.lane,0,v.s);
+  if(v.next>=0){ const ne=E[v.next>>1]; mira(v.next>>1,v.next&1,Math.min(v.lane,lanesDir(ne)-1),rem,0); }
+  return g; }
+// ---- construir una incidencia de un tipo sobre la calle ei, en su punto medio, sentido a→b
+function incPoner(tipo,ei,texto){
+  const E=RED.E, e=E[ei], ln=lanesDir(e), mid=e.len/2, inc={tipo,ei,texto,piezas:[],gente:[],luces:[],bloq:[],t0:performance.now()/1000};
+  const bloquea=(...a)=>{ for(const p of incBloquea(ei,...a)) inc.bloq.push(p); };
+  const laneOff=l=>e.one?(l-(ln-1)/2)*3.1:1.65+l*3.1, outer=ln-1;
+  const at=(u,lat,o)=>{ edgePt(e,Math.max(0.5,Math.min(e.len-0.5,u)),lat,o||PQ); return [PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])]; };
+  const pon=(k,u,lat,giro,col)=>{ const [x,z,a]=at(u,lat); inc.piezas.push([k,x,z,a+(giro||0),col]); };
+  const luz=(u,lat,y,col,f,ph)=>{ const [x,z]=at(u,lat); inc.luces.push([x,y,z,col,f,ph]); };
+  const AMB=[1,0.62,0.2], AZ=[0.3,0.5,1], RO=[1,0.25,0.2];
+  if(tipo==='obras'){ const lo=laneOff(outer), L=14, u0=mid-L/2;
+    for(let k=0;k<7;k++){ pon('valla',u0+1+k*2,lo-1.45,0); pon('valla',u0+1+k*2,lo+1.45,0); }
+    pon('valla',u0,lo,Math.PI/2); pon('valla',u0+L,lo,Math.PI/2);
+    for(let k=0;k<4;k++) pon('cono',u0-3-k*3,lo-(k*0.35),0);
+    pon('arena',mid+2,lo+0.2,0.4);
+    luz(u0,lo-1.45,1.15,AMB,1.2,0); luz(u0,lo+1.45,1.15,AMB,1.2,0.5); luz(u0+L,lo-1.45,1.15,AMB,1.2,0.25);
+    inc.gente.push({u:mid-3,lat:lo-0.4,amp:2.5,f:0.13,ph:0,col:ORANGE},{u:mid+4,lat:lo+0.3,amp:1.2,f:0.21,ph:2,col:C.ochre});
+    bloquea(0,[outer],u0-4,u0+L+0.5); }
+  if(tipo==='accidente'){ const l0=laneOff(Math.max(0,outer-1)), l1=laneOff(outer);
+    inc.piezas.push(['coche',...at(mid+2.5,l1),C.blue]); inc.piezas[inc.piezas.length-1][3]+=0.35;
+    inc.piezas.push(['utilitario',...at(mid-2.3,(l0+l1)/2),C.silver]); inc.piezas[inc.piezas.length-1][3]-=0.5;
+    pon('urbana',mid-11,l1,0);
+    for(let k=0;k<5;k++) pon('cono',mid-16-k*2.5,l1-1.3+k*0.5*(ln>1?1:0.2),0);
+    pon('triangulo',mid-26,l1,Math.PI/2);
+    for(const [u,l] of [[mid+4.6,l1],[mid+0.4,l1],[mid-0.2,(l0+l1)/2],[mid-4.4,(l0+l1)/2]]){ luz(u,l-0.75,0.65,AMB,1.6,0); luz(u,l+0.75,0.65,AMB,1.6,0); }
+    luz(mid-11,l1-0.35,1.62,AZ,3.2,0); luz(mid-11,l1+0.35,1.62,RO,3.2,0.5);
+    inc.gente.push({u:mid-8,lat:l1+2.2,amp:0.6,f:0.1,ph:1,col:GU_BLUE},{u:mid+6,lat:l1+2.4,amp:0.3,f:0.05,ph:0,col:C.red});
+    bloquea(0,ln>1?[outer-1,outer]:[outer],mid-18,mid+5.5); }
+  if(tipo==='manifestacion'){ const W=e.one?ln*3.1:ln*3.1*2, L=26;
+    inc.marcha={u0:mid-L/2-20,len:40,v:0.55};
+    for(let k=0;k<70;k++) inc.gente.push({mar:true,du:Math.random()*L,lat:(Math.random()-0.5)*(W-2),col:ROPA[k%ROPA.length],ph:Math.random()*6});
+    inc.pancartas=[{du:L+0.8,lat:-2.2},{du:L+0.8,lat:2.2},{du:L*0.45,lat:0}];
+    inc.banderas=[{du:L*0.7,lat:-3,col:C.red},{du:L*0.25,lat:2.6,col:C.green},{du:L*0.55,lat:3.4,col:0x8a7aa8}];
+    inc.furgon=true;
+    INC_CERRADA.add(ei); bloquea(-1,null,0,e.len); }
+  if(tipo==='cortada'){ const W=e.one?ln*3.1:ln*3.1*2;
+    for(let x=-W/2+0.95;x<W/2;x+=2) pon('valla',mid,x,Math.PI/2);
+    pon('desvio',mid-4,W/2+0.6,Math.PI/2); pon('urbana',mid-8,laneOff(0),0);
+    luz(mid,-W/2+0.95,1.15,AMB,1.2,0); luz(mid,W/2-0.95,1.15,AMB,1.2,0.5);
+    luz(mid-8,laneOff(0)-0.35,1.62,AZ,3.2,0); luz(mid-8,laneOff(0)+0.35,1.62,RO,3.2,0.5);
+    inc.gente.push({u:mid-5,lat:laneOff(0)+1.6,amp:1.5,f:0.07,ph:0,col:GU_BLUE});
+    INC_CERRADA.add(ei); bloquea(-1,null,mid-1,mid+1); }
+  if(tipo==='averia'){ const lo=laneOff(outer);
+    inc.piezas.push(['utilitario',...at(mid,lo+0.3),C.red]);
+    pon('triangulo',mid-30,lo,Math.PI/2);
+    luz(mid+2,lo-0.55,0.65,AMB,1.4,0); luz(mid+2,lo+1.15,0.65,AMB,1.4,0); luz(mid-1.95,lo-0.55,0.75,AMB,1.4,0); luz(mid-1.95,lo+1.15,0.75,AMB,1.4,0);
+    inc.gente.push({u:mid-3.5,lat:lo+2.6,amp:0.8,f:0.08,ph:0,col:C.ochre});
+    bloquea(0,[outer],mid-6,mid+2.6); }
+  const [cx,cz]=at(mid,0); inc.x=cx; inc.z=cz; inc.i=INC_TIPOS[tipo]??5;
+  INCS.push(inc);
+}
+function incBuildGPU(){
+  const P=[],Cc=[],F=[],Ph=[]; for(const inc of INCS) for(const [x,y,z,c,f,ph] of inc.luces){ P.push(x,y,z); Cc.push(...c); F.push(f); Ph.push(ph); }
+  const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.Float32BufferAttribute(P,3)); g.setAttribute('aC',new THREE.Float32BufferAttribute(Cc,3));
+  g.setAttribute('aF',new THREE.Float32BufferAttribute(F,1)); g.setAttribute('aPh',new THREE.Float32BufferAttribute(Ph,1));
+  if(beacons){ root.remove(beacons); beacons.geometry.dispose(); }
+  beacons=new THREE.Points(g,beaconMat); beacons.frustumCulled=false; beacons.renderOrder=996; root.add(beacons);
+  const A=[],I=[],H=[]; for(const inc of INCS){ A.push(inc.x,14,inc.z); I.push(inc.i); H.push(Math.random()); }
+  const g2=new THREE.BufferGeometry(); g2.setAttribute('position',new THREE.Float32BufferAttribute(A,3)); g2.setAttribute('aI',new THREE.Float32BufferAttribute(I,1)); g2.setAttribute('aPh',new THREE.Float32BufferAttribute(H,1));
+  if(!avisoMat.uniforms.atlas.value) avisoMat.uniforms.atlas.value=iconAtlas();
+  if(avisos){ root.remove(avisos); avisos.geometry.dispose(); }
+  avisos=new THREE.Points(g2,avisoMat); avisos.frustumCulled=false; avisos.renderOrder=999; root.add(avisos);
+}
+function incDemo(){
+  // cinco calles principales distintas cerca de Passeig de Gràcia × Gran Via (donde aterriza la entrada)
+  const c=K.intro||{x:1468,z:1135}, E=RED.E, cand=[];
+  E.forEach((e,i)=>{ const d=Math.hypot(e.mx-c.x,e.mz-c.z); if(e.cls>=1&&e.cls<=4&&e.len>70&&d>25&&d<260&&!tramCerca(e.mx,e.mz,6)) cand.push([d,i]); });
+  cand.sort((a,b)=>a[0]-b[0]); const elegidas=[];
+  for(const [,i] of cand){ if(elegidas.length>=5) break; if(elegidas.every(j=>Math.hypot(E[j].mx-E[i].mx,E[j].mz-E[i].mz)>70)) elegidas.push(i); }
+  const tipos=[['obras','Obras · carril cortado (demostración)'],['accidente','Accidente · restricciones (demostración)'],['manifestacion','Manifestación · calle cortada (demostración)'],
+    ['cortada','Calle cortada (demostración)'],['averia','Vehículo averiado (demostración)']];
+  elegidas.forEach((ei,k)=>incPoner(tipos[k][0],ei,tipos[k][1]));
+  incBuildGPU();
+}
+const _ic=new THREE.Color();
+// ¿cae (calle, sentido, carril, posición) dentro de una incidencia? (para no hacer aparecer coches ahí)
+function incDentro(ei,dir,lane,s){ const l=INC_OBS.get(ei); if(!l) return false; const e=RED.E[ei], u=dir?e.len-s:s;
+  for(const o of l){ if((o.dir<0||o.dir===dir)&&(!o.lanes||o.lanes.includes(lane))&&u>o.s0-8&&u<o.s1+8) return true; } return false; }
+// buses (van por su recorrido, no por el grafo): ¿incidencia en su carril justo delante? → distancia hasta ella o −1
+function incBus(x,z,da,front){ const dx=Math.cos(da), dz=Math.sin(da); let g=-1;
+  for(const inc of INCS) for(const [px,pz] of inc.bloq){ const rx=px-x, rz=pz-z, lon=rx*dx+rz*dz; if(lon<=0||lon>front+25) continue;
+    if(Math.abs(-rx*dz+rz*dx)<2.2){ const d=Math.max(0,lon-front-2); if(g<0||d<g) g=d; } }
+  return g; }
+function incStep(now,dt,mpp){
+  if(!INCS.length) return false;
+  const t=now/1000, R=incRenderers(); for(const k in R) R[k].n=0;
+  const put=(k,x,z,a,s,col,y)=>{ const r=R[k]; if(r.n>=r.cap) return; writePose(r.mat.array,r.n,x,z,a,s,y); _ic.set(col==null?0xffffff:col); const A=r.color.array; A[r.n*3]=_ic.r; A[r.n*3+1]=_ic.g; A[r.n*3+2]=_ic.b; r.n++; };
+  const cerca=mpp<VEH_MPP, cam=K.controls.target, R2=(area.r||600)**2*1.6;
+  for(const inc of INCS){ if((inc.x-cam.x)**2+(inc.z-cam.z)**2>R2||!cerca) continue;
+    const e=RED.E[inc.ei];
+    for(const [k,x,z,a,col] of inc.piezas) put(k,x,z,a,1,col);
+    if(inc.marcha){ const M=inc.marcha, adv=((t-inc.t0)*M.v)%M.len;                       // la marcha avanza despacio y vuelve a empezar
+      const f=Math.min(1,adv/3,(M.len-adv)/3);
+      for(const p of inc.gente){ edgePt(e,M.u0+adv+p.du,p.lat,PQ); const bob=Math.abs(Math.sin(t*3.2+p.ph))*0.05;
+        put(p.ph>3?'gente':'gente2',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2]),f,p.col,0.3+bob); }
+      for(const b of inc.pancartas){ edgePt(e,M.u0+adv+b.du,b.lat,PQ); put('pancarta',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+Math.PI/2+Math.sin(t*1.3+b.lat)*0.08,f,null); }
+      for(const b of inc.banderas){ edgePt(e,M.u0+adv+b.du,b.lat,PQ); put('bandera',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+Math.PI+Math.sin(t*2.1+b.lat)*0.35,f,b.col); }
+      edgePt(e,M.u0+adv-7,1.6,PQ); put('furgonUrbana',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2]),f,null); }
+    else for(const p of inc.gente){ const u=p.u+Math.sin(t*p.f*6.283+p.ph)*p.amp; edgePt(e,u,p.lat,PQ);
+      const dir=Math.cos(t*p.f*6.283+p.ph)>=0?0:Math.PI; put('gente',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+dir,1,p.col,0.3+Math.abs(Math.sin(t*3+p.ph))*0.03); } }
+  for(const k in R) setCount(R[k],R[k].n);
+  { const hi=mpp<HI_MPP; for(const k in R){ for(const im of R[k].hi) im.visible=hi; for(const im of R[k].lo) im.visible=!hi; } }
+  const dpr=K.renderer.getPixelRatio(); beaconMat.uniforms.time.value=t; beaconMat.uniforms.dpr.value=dpr; beacons.visible=cerca;
+  avisoMat.uniforms.time.value=t; avisoMat.uniforms.dpr.value=dpr; avisoMat.uniforms.op.value=Math.min(1,Math.max(0,(mpp-0.45)/0.5)); avisos.visible=mpp>0.45;
+  // rótulos (solo en la demostración): qué es cada una
+  let used=0;
+  if(INC_DEMO&&mpp<1.5) for(const inc of INCS){ _p.set(inc.x,6,inc.z).project(K.cam); if(Math.abs(_p.x)>1||Math.abs(_p.y)>1) continue;
+    let el=incLbl[used]; if(!el){ el=document.createElement('span'); el.style.cssText='position:absolute;transform:translate(-50%,-140%);font:600 12px/1.25 "EB Garamond",serif;color:#3a2616;background:#f3ead6;padding:1px 6px;border:1px solid #a9483a;border-radius:2px;white-space:nowrap'; busLblBox.appendChild(el); incLbl.push(el); }
+    el.textContent=inc.texto; el.style.left=((_p.x+1)/2*innerWidth)+'px'; el.style.top=((1-_p.y)/2*innerHeight)+'px'; el.style.display='block'; used++; }
+  for(let i=used;i<incLbl.length;i++) incLbl[i].style.display='none';
+  return true;
+}
+
 /* ================= Bucle ================= */
 let lastPanel=0, simErr='', lastStep=0;
 K.frameHooks.push((now,dt)=>{ try{ return frame(now,dt); }catch(e){ if(!simErr){ simErr=String(e&&e.stack||e).slice(0,300); console.error('vivo:',e); panel(); } return false; } });
@@ -1491,7 +1682,9 @@ function frame(now,dt){
   { const hi=mpp<HI_MPP; for(const r of [...(RC||[]),...(RB||[]),...(RP||[]),...(RBC||[]),...(RT?[RT]:[])]){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   if(RP&&mpp>=PARK_MPP) for(const r of RP){ for(const im of r.hi) im.visible=false; for(const im of r.lo) im.visible=false; }
   if(PEDR){ const hi=mpp<PED_HI; for(const r of PEDR){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
-  anim=anim||cyc||ped;
+  if(INC_DEMO&&!incReady&&RED&&tramState!=='loading'&&tramState!=='none'){ incReady=true; incDemo(); }
+  const incA=INCS.length?incStep(now,dt,mpp):false;
+  anim=anim||cyc||ped||incA;
   vehGroup.visible=anim; if(!anim||!BUS) hideBusLabels();
   if(now-lastPanel>2000){ lastPanel=now; if(anim||redState==='loading') panel(); }
   return anim||wxAnim;
