@@ -1661,9 +1661,9 @@ function causaDe(t){ t=t.toLowerCase();
     :/manifestaci|concentraci|protesta|vaga/.test(t)?'manifestacion':/esdeveniment|cursa|marat|festa|concert|partit|cavalcada|desfilada|fira|rodatge|filmaci/.test(t)?'evento'
     :/incendi|emergència|inundaci|despreniment|fuita|bombers/.test(t)?'emergencia':'sin_indicar'; }
 function situar(frase){
-  const tramo=frase.match(/^(.+?)\s+de\s+((?:(?!\s+de\s).)+?)\s+fins\s+a\s+(.+?)(?:,|\s+tallat|\s+tallada|\s+restricc|\.|$)/i);
+  const tramo=frase.match(/^(.+?)\s+de\s+((?:(?!\s+de\s).)+?)\s+fins\s+a\s+(.+?)(?:,|\s+tallat|\s+tallada|\s+restricc|\.?\s*$)/i);
   const via=tramo?tramo[1]:frase.split(/\s+sentit\s+|\s+a\s+l[´'’]altura|,|\s+tallat|\s+tallada|\s+restricc/i)[0];
-  const alt=frase.match(/a\s+l[´'’]altura\s+(?:de\s+la\s+|del\s+|de\s+|d[´'’])?(.+?)(?:,|\s+tallat|\s+tallada|\s+restricc|\s+per\s+|\.|$)/i);
+  const alt=frase.match(/a\s+l[´'’]altura\s+(?:de\s+la\s+|del\s+|de\s+|d[´'’])?(.+?)(?:,|\s+tallat|\s+tallada|\s+restricc|\s+per\s+|\.?\s*$)/i);
   const sm=frase.match(/sentit\s+(muntanya|mar|bes[oò]s|llobregat)/i), sent=sm?SENTIT[tokens(sm[1])[0]]:null;
   const A=calles(via); if(!A.length) return null;
   if(tramo){ const c1=cruce(A,calles(tramo[2])), c2=cruce(A,calles(tramo[3]));
