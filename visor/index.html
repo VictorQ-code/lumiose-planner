@@ -156,6 +156,8 @@
 let PASO='inicio'; const T0=performance.now(), MARKS=[];
 function paso(n){ MARKS.push([PASO,performance.now()-T0]); PASO=n; }
 function mostrarError(err){
+  // Con la ciudad ya en pantalla, un fallo suelto (una tesela, un dato en vivo, un gesto raro) no tapa la vista: solo se anota
+  if(window.__visorListo){ console.error('Lumiose Planner:',err); return; }
   const m=document.getElementById('msg'), bar=document.getElementById('bar');
   if(bar) bar.style.display='none';
   if(m) m.textContent=T('Error en el paso "','Error at step "')+PASO+'":\n'+(err&&err.message?err.message:err)+(err&&err.stack?'\n\n'+String(err.stack).split('\n').slice(0,4).join('\n'):'');
@@ -1069,6 +1071,19 @@ function clampTarget(){
   const t=controls.target, cx=THREE.MathUtils.clamp(t.x,minX,maxX), cz=THREE.MathUtils.clamp(t.z,minZ,maxZ);
   if(cx!==t.x||cz!==t.z){ const dx=cx-t.x, dz=cz-t.z; t.x=cx; t.z=cz; cam.position.x+=dx; cam.position.z+=dz; }
 }
+// Red de seguridad de la cámara: un pellizco muy rápido (dos dedos detectados en el mismo punto) puede dejar el zoom
+// en «no es un número» y romper la vista. Si pasa, se vuelve al último encuadre bueno y se vacía la inercia de los controles.
+const camOK={zoom:cam.zoom,pos:cam.position.clone(),tgt:controls.target.clone(),q:cam.quaternion.clone()};
+function camBuena(){ const p=cam.position, t=controls.target;
+  return Number.isFinite(cam.zoom)&&cam.zoom>0&&Number.isFinite(p.x+p.y+p.z)&&Number.isFinite(t.x+t.y+t.z)&&Number.isFinite(cam.quaternion.w); }
+function camVolver(){ cam.zoom=camOK.zoom; cam.position.copy(camOK.pos); controls.target.copy(camOK.tgt); cam.quaternion.copy(camOK.q); cam.updateProjectionMatrix(); }
+function camGuard(){
+  if(camBuena()){ camOK.zoom=cam.zoom; camOK.pos.copy(cam.position); camOK.tgt.copy(controls.target); camOK.q.copy(cam.quaternion); return; }
+  console.warn('Lumiose Planner: cámara recuperada tras un gesto raro');
+  zoomGoal=null; fly=null; camVolver();
+  const d=controls.enableDamping; controls.enableDamping=false; controls.update(); controls.enableDamping=d;   // sin inercia: borra el desplazamiento malo
+  camVolver(); dirty=true;
+}
 // Vuelo suave hasta un punto (doble clic, minimapa)
 let fly=null;
 function flyTo(point,zoom){
@@ -1180,7 +1195,7 @@ function tick(){
   requestAnimationFrame(tick);
   const now=performance.now();
   const dt=Math.min(clock.getDelta(),0.05);
-  if(bench) bench.step(now); else { zoomStep(); flyStep(dt); keyStep(dt); controls.update(); clampTarget(); }
+  if(bench) bench.step(now); else { zoomStep(); flyStep(dt); keyStep(dt); controls.update(); clampTarget(); camGuard(); }
   pickPoll();
   if(lastFrame) worst=Math.max(worst,now-lastFrame); lastFrame=now;
   if(REC.on){ if(REC.last!==null) REC.dts.push(now-REC.last); REC.last=now; }
@@ -1663,7 +1678,7 @@ $('msg').textContent=T('Preparando el tráfico, los buses y los datos en vivo…
   while(!(window.CITY3D&&window.CITY3D.listo)&&performance.now()-t<15000) await sleep(50);              // vivo.js aún no ha llegado
   if(window.CITY3D&&window.CITY3D.listo) await Promise.race([window.CITY3D.listo,sleep(Math.max(0,15000-(performance.now()-t)))]);
   await sleep(400);                                                                                          // un respiro para el primer dibujo con todo
-  dirty=true; $('load').style.opacity=0; setTimeout(()=>$('load').style.display='none',500);
+  dirty=true; window.__visorListo=true; $('load').style.opacity=0; setTimeout(()=>$('load').style.display='none',500);
 })();
 /* ================= Capa en vivo (visor/vivo.js): tráfico, vehículos, Bicing, tiempo… ================= */
 window.CITY3D={THREE,scene,cam,controls,renderer,U,LMS,LDIR,INK,BASE,CITY,mppNow,frameHooks:[],metro,metroGroup,trainSets,dirty:()=>{ dirty=true; },get mode(){ return mode; },
