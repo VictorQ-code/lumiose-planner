@@ -380,7 +380,7 @@ function drive(v,dt){
   if(v.px!==undefined&&busGrid.size){ const h=aheadIn(busGrid,v.px,v.pz,v.ang,35,null);
     if(h){ const g=h[0]-(h[1].len+L)/2; if(g<gap){ gap=g; dv=v.v-h[1].v; } } }
   if(v.px!==undefined&&TRAM){ const g=tramParar(v.px,v.pz,Math.cos(v.ang),-Math.sin(v.ang),Math.max(25,v.v*v.v/(2*B_DEC)+L+12),L,gap);   // tranvía: prioridad
-    if(g>=0&&g<gap){ gap=g; dv=v.v; } }
+    if(g>=0&&g<gap){ gap=g; dv=v.v; if(g<8) nTramWait++; } }
   const a=v.bus?A_BUS:A_CAR, ss=S0+Math.max(0,v.v*T_HW+v.v*dv/(2*Math.sqrt(a*B_DEC)));
   let acc=a*(1-Math.pow(v.v/v0,4)-(gap<1e8?(ss/Math.max(gap,0.05))**2:0));
   v.v=Math.max(0,v.v+Math.max(acc,-9)*dt);
@@ -578,7 +578,8 @@ let TRAM=null, tramState='none', tramActive=[], tramLastScan=0, nTramAll=0, nTra
 async function loadTram(){
   tramState='loading';
   try{ const r=await fetch(VIVO+'tranvia.json',{cache:'no-cache'}); if(!r.ok) throw new Error(r.status);
-    TRAM=prepBuses(await r.json()); TRAM.off=TRAM_OFF; TRAM.dwell=20; prepTramGrid(); tramState='ready'; okLoad('tram'); }
+    TRAM=prepBuses(await r.json()); TRAM.off=TRAM_OFF; TRAM.dwell=20; prepTramGrid(); tramState='ready'; okLoad('tram');
+    if(PN){ PN.off.fill(NaN); for(const p of peds) if(!p.tr&&tramCerca(...pedXY0(p),0.8)) p.dead=true; } }   // aceras recalculadas sin las vías
   catch(e){ tramState='missing'; retryLater('tram',()=>{ if(tramState==='missing') tramState='none'; },e); }
   panel(); K.dirty();
 }
@@ -851,7 +852,11 @@ function sideDist(i,s){ const k=2*i+(s>0?0:1); let v=PN.off[k]; if(v===v) return
   const e=RED.E[i]; _sd.length=0;
   for(const f of [0.3,0.5,0.7]){ edgePt(e,e.len*f,0,PQ); const x=PQ[0], z=PQ[1], nx=-PQ[3]*s, nz=PQ[2]*s;
     let t=0; while(t<=30&&isRoad(x+nx*t,z+nz*t)) t+=0.5; if(t<=30) _sd.push(t); }
-  _sd.sort((a,b)=>a-b); v=_sd.length>=2?_sd[_sd.length>>1]:NO_ACERA; PN.off[k]=v; return v; }
+  _sd.sort((a,b)=>a-b); v=_sd.length>=2?_sd[_sd.length>>1]:NO_ACERA;
+  if(v<NO_ACERA&&TRAM){ let enVia=0;                                            // esa «acera» cae en la plataforma del tranvía: no se camina por ahí
+    for(const f of [0.25,0.5,0.75]){ edgePt(e,e.len*f,s*(v+ACERA+0.5),PQ); if(tramCerca(PQ[0],PQ[1],0.8)) enVia++; }
+    if(enVia>=2) v=NO_ACERA; }
+  PN.off[k]=v; return v; }
 const latOf=(i,s,p)=>s*(sideDist(i,s)+ACERA+p.j);
 // en un cruce, la acera se corta donde empieza la acera de las otras calles que llegan a él
 function trimAt(node,self){ if(RED.deg[node]<=2) return 0; let m=0;
@@ -873,6 +878,7 @@ function planNext(p){
   if(!best) best={e:p.e,dir:p.dir?0:1,lat:p.lat,x1:x0,z1:z0,L:0};                   // sin salida: media vuelta por la misma acera
   p.nx={...best,x0,z0,node:end,sig:RED.sig[end]===1&&best.L>5,ang:Math.atan2(best.z1-z0,best.x1-x0)};
 }
+const pedXY0=p=>{ pedPos(p,PA); return [PA[0],PA[1]]; };
 function pedPos(p,o){
   if(p.tr){ const t=p.tr, f=t.L>0.01?Math.min(1,t.s/t.L):1; o[0]=t.x0+(t.x1-t.x0)*f; o[1]=t.z0+(t.z1-t.z0)*f; o[2]=-t.ang; return; }
   const e=RED.E[p.e]; edgePt(e,p.dir?p.u1-p.s:p.u0+p.s,p.lat,o); const hx=p.dir?-o[2]:o[2], hz=p.dir?-o[3]:o[3];
