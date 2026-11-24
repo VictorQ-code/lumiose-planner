@@ -56,7 +56,15 @@ async function pedirConReintentos(url, n = 3) {
   }
 }
 async function trafico(env, d) { await guardar(env, 'trafico', d, await pedirConReintentos(TRAFICO)); }
-async function incidencias(env, d) { await guardar(env, 'incidencias_bcn', d, await pedirConReintentos(INC_BCN)); }
+async function incidencias(env, d) {
+  const txt = await pedirConReintentos(INC_BCN);
+  await guardar(env, 'incidencias_bcn', d, txt);
+  // el último aviso, para el visor (/api/incidencias): una frase por incidencia, el visor la sitúa en el mapa
+  const linea = txt.split(/\r?\n/).find(l => l.trim()) || '';
+  const frases = linea.split(/\s{3,}/).map(s => s.trim()).filter(s => s.length > 3);
+  await env.DATOS.put('vivo/incidencias.json', JSON.stringify({ ts: d.toISOString(), fuente: 'Ajuntament de Barcelona · avisos de trànsit', frases }),
+    { httpMetadata: { contentType: 'application/json' } });
+}
 // El XML del SCT pesa ~1 MB: comprimirlo aquí se comería los 10 ms de procesador del plan gratuito, así que se guarda
 // tal cual (se copia sin leerlo) y lo comprime el compactador nocturno junto con el resto del día
 async function incidenciasSct(env, d) {
@@ -136,9 +144,10 @@ export default {
 
   async fetch(req, env) {
     const { pathname } = new URL(req.url);
-    if (pathname === '/api/ibus' || pathname === '/api/estado') {
-      const o = await env.DATOS.get(pathname === '/api/ibus' ? 'vivo/ibus.json' : 'estado.json');
-      return new Response(o ? o.body : (pathname === '/api/ibus' ? '{"obs":[]}' : '{}'), { headers: { ...JSON_H, 'cache-control': 'public, max-age=60' } });
+    const API = { '/api/ibus': ['vivo/ibus.json', '{"obs":[]}'], '/api/estado': ['estado.json', '{}'], '/api/incidencias': ['vivo/incidencias.json', '{"frases":[]}'] };
+    if (API[pathname]) {
+      const [clave, vacio] = API[pathname], o = await env.DATOS.get(clave);
+      return new Response(o ? o.body : vacio, { headers: { ...JSON_H, 'cache-control': 'public, max-age=60' } });
     }
     if (pathname.startsWith('/api/')) return new Response('{"error":"no existe"}', { status: 404, headers: JSON_H });
     return env.ASSETS.fetch(req);

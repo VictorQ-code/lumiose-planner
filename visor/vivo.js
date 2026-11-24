@@ -1427,6 +1427,8 @@ function panel(){
   let tr='', bk='', vh='';
   if(caps.trafico&&caps.trafico.estado==='error') tr='error: '+caps.trafico.error;
   else if(TRAF){ let d=0,t=0; for(const s of TRAF.values()){ if(s>0) t++; if(s>=3&&s<=5) d++; } tr=TX(`${t} tramos con datos · ${d} densos o atascados`,`${t} road sections with data · ${d} heavy or jammed`); }
+  if(INC_N&&!INC_DEMO) tr+=(tr?'<br>':'')+TX(`${INC_N} incidencias del Ayuntamiento · ${INCS.length} en el mapa`,`${INC_N} city traffic incidents · ${INCS.length} on the map`)
+    +(INC_SIN.length?TX(` (${INC_SIN.length} sin sitio exacto)`,` (${INC_SIN.length} without an exact place)`):'');
   if(BIKE){ const T=BIKE.totales||{}; bk=TX(`${NUM(T.mecanicas||0)} mecánicas · ${NUM(T.electricas||0)} eléctricas · ${T.estaciones||0} estaciones`,`${NUM(T.mecanicas||0)} mechanical · ${NUM(T.electricas||0)} electric · ${T.estaciones||0} stations`)
     +(T.cogidas||T.dejadas?TX(`<br>último minuto: ${T.cogidas||0} cogidas, ${T.dejadas||0} dejadas`,`<br>last minute: ${T.cogidas||0} taken, ${T.dejadas||0} returned`):'')
     +(bkState==='missing'&&LOADERR.bici==='404'?TX('<br>falta la red ciclista: ejecuta <b>python pipeline\\red_viaria.py</b>','<br>cycle network missing'):BK?TX(`<br>${nCyc} ciclistas cerca (salidas y llegadas reales, trayecto estimado)`,`<br>${nCyc} cyclists nearby (real departures and arrivals, estimated route)`):''); }
@@ -1537,54 +1539,61 @@ function incGap(v,L,rem){ let g=1e9; const E=RED.E;
   if(v.next>=0){ const ne=E[v.next>>1]; mira(v.next>>1,v.next&1,Math.min(v.lane,lanesDir(ne)-1),rem,0); }
   return g; }
 // ---- construir una incidencia de un tipo sobre la calle ei, en su punto medio, sentido a→b
-function incPoner(tipo,ei,texto){
-  const E=RED.E, e=E[ei], ln=lanesDir(e), mid=e.len/2, inc={tipo,ei,texto,piezas:[],gente:[],luces:[],bloq:[],t0:performance.now()/1000};
-  const bloquea=(...a)=>{ for(const p of incBloquea(ei,...a)) inc.bloq.push(p); };
+// o.u: centro de la escena (metros desde el nodo a de la calle); o.dir: sentido de la marcha afectada (0 = a→b, 1 = b→a).
+// Dentro, todo se mide en el sentido de la marcha: 'du' adelante/atrás desde el centro y 'lat' a la derecha del conductor.
+const INC_EXT={obras:[-11,8],accidente:[-27,7],manifestacion:[-34,8],cortada:[-9,1],averia:[-31,3]};
+function incPoner(tipo,ei,texto,o){
+  o=o||{}; const E=RED.E, e=E[ei], ln=lanesDir(e), dir=e.one?0:(o.dir?1:0), sg=dir?-1:1;
+  const ext=INC_EXT[tipo]||[-10,5];                                               // que la escena quepa en la calle
+  const minM=dir?ext[1]:-ext[0], maxM=dir?e.len+ext[0]:e.len-ext[1];
+  const mid=minM>maxM?e.len/2:Math.max(minM,Math.min(maxM,o.u??e.len/2));
+  const inc={tipo,ei,texto,piezas:[],gente:[],luces:[],bloq:[],t0:performance.now()/1000};
+  const U=du=>mid+sg*du;
+  const bloquea=(lanes,d0,d1,ambos)=>{ const a=U(d0), b=U(d1); for(const p of incBloquea(ei,ambos?-1:dir,lanes,Math.min(a,b),Math.max(a,b))) inc.bloq.push(p); };
   const laneOff=l=>e.one?(l-(ln-1)/2)*3.1:1.65+l*3.1, outer=ln-1;
-  const at=(u,lat,o)=>{ edgePt(e,Math.max(0.5,Math.min(e.len-0.5,u)),lat,o||PQ); return [PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])]; };
-  const pon=(k,u,lat,giro,col)=>{ const [x,z,a]=at(u,lat); inc.piezas.push([k,x,z,a+(giro||0),col]); };
-  const luz=(u,lat,y,col,f,ph)=>{ const [x,z]=at(u,lat); inc.luces.push([x,y,z,col,f,ph]); };
+  const at=(du,lat)=>{ edgePt(e,Math.max(0.5,Math.min(e.len-0.5,U(du))),sg*lat,PQ); return [PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+(dir?Math.PI:0)]; };
+  const pon=(k,du,lat,giro,col)=>{ const [x,z,a]=at(du,lat); inc.piezas.push([k,x,z,a+(giro||0),col]); };
+  const luz=(du,lat,y,col,f,ph)=>{ const [x,z]=at(du,lat); inc.luces.push([x,y,z,col,f,ph]); };
+  const persona=(du,lat,amp,f,ph,col)=>inc.gente.push({u:U(du),lat:sg*lat,amp,f,ph,col,flip:dir});
   const AMB=[1,0.62,0.2], AZ=[0.3,0.5,1], RO=[1,0.25,0.2];
-  if(tipo==='obras'){ const lo=laneOff(0), L=14, u0=mid-L/2;                  // carril central: de arriba no lo tapan los árboles de la acera
-    for(let k=0;k<7;k++){ pon('valla',u0+1+k*2,lo-1.45,0); pon('valla',u0+1+k*2,lo+1.45,0); }
-    pon('valla',u0,lo,Math.PI/2); pon('valla',u0+L,lo,Math.PI/2);
-    for(let k=0;k<4;k++) pon('cono',u0-3-k*3,lo-(k*0.35),0);
-    pon('arena',mid+2,lo+0.2,0.4);
-    luz(u0,lo-1.45,1.15,AMB,1.2,0); luz(u0,lo+1.45,1.15,AMB,1.2,0.5); luz(u0+L,lo-1.45,1.15,AMB,1.2,0.25);
-    inc.gente.push({u:mid-3,lat:lo-0.4,amp:2.5,f:0.13,ph:0,col:ORANGE},{u:mid+4,lat:lo+0.3,amp:1.2,f:0.21,ph:2,col:C.ochre});
-    bloquea(0,[0],u0-4,u0+L+0.5); }
+  if(tipo==='obras'){ const lo=laneOff(0), L=14, d0=-L/2;                    // carril central: de arriba no lo tapan los árboles de la acera
+    for(let k=0;k<7;k++){ pon('valla',d0+1+k*2,lo-1.45,0); pon('valla',d0+1+k*2,lo+1.45,0); }
+    pon('valla',d0,lo,Math.PI/2); pon('valla',d0+L,lo,Math.PI/2);
+    for(let k=0;k<4;k++) pon('cono',d0-3-k*3,lo-(k*0.35),0);
+    pon('arena',2,lo+0.2,0.4);
+    luz(d0,lo-1.45,1.15,AMB,1.2,0); luz(d0,lo+1.45,1.15,AMB,1.2,0.5); luz(d0+L,lo-1.45,1.15,AMB,1.2,0.25);
+    persona(-3,lo-0.4,2.5,0.13,0,ORANGE); persona(4,lo+0.3,1.2,0.21,2,C.ochre);
+    bloquea([0],d0-4,d0+L+0.5); }
   if(tipo==='accidente'){ const l0=laneOff(0), l1=laneOff(Math.min(1,outer));
-    inc.piezas.push(['coche',...at(mid+2.5,l1),C.blue]); inc.piezas[inc.piezas.length-1][3]+=0.35;
-    inc.piezas.push(['utilitario',...at(mid-2.3,(l0+l1)/2),C.silver]); inc.piezas[inc.piezas.length-1][3]-=0.5;
-    pon('urbana',mid-11,l1,0);
-    for(let k=0;k<5;k++) pon('cono',mid-16-k*2.5,l1-1.3+k*0.5*(ln>1?1:0.2),0);
-    pon('triangulo',mid-26,l1,Math.PI/2);
-    for(const [u,l] of [[mid+4.6,l1],[mid+0.4,l1],[mid-0.2,(l0+l1)/2],[mid-4.4,(l0+l1)/2]]){ luz(u,l-0.75,0.65,AMB,1.6,0); luz(u,l+0.75,0.65,AMB,1.6,0); }
-    luz(mid-11,l1-0.35,1.62,AZ,3.2,0); luz(mid-11,l1+0.35,1.62,RO,3.2,0.5);
-    inc.gente.push({u:mid-8,lat:l1+2.2,amp:0.6,f:0.1,ph:1,col:GU_BLUE},{u:mid+6,lat:l1+2.4,amp:0.3,f:0.05,ph:0,col:C.red});
-    bloquea(0,ln>1?[0,1]:[0],mid-18,mid+5.5); }
+    pon('coche',2.5,l1,0.35,C.blue); pon('utilitario',-2.3,(l0+l1)/2,-0.5,C.silver);
+    pon('urbana',-11,l1,0);
+    for(let k=0;k<5;k++) pon('cono',-16-k*2.5,l1-1.3+k*0.5*(ln>1?1:0.2),0);
+    pon('triangulo',-26,l1,Math.PI/2);
+    for(const [d,l] of [[4.6,l1],[0.4,l1],[-0.2,(l0+l1)/2],[-4.4,(l0+l1)/2]]){ luz(d,l-0.75,0.65,AMB,1.6,0); luz(d,l+0.75,0.65,AMB,1.6,0); }
+    luz(-11,l1-0.35,1.62,AZ,3.2,0); luz(-11,l1+0.35,1.62,RO,3.2,0.5);
+    persona(-8,l1+2.2,0.6,0.1,1,GU_BLUE); persona(6,l1+2.4,0.3,0.05,0,C.red);
+    bloquea(ln>1?[0,1]:[0],-18,5.5); }
   if(tipo==='manifestacion'){ const W=e.one?ln*3.1:ln*3.1*2, L=26;
-    inc.marcha={u0:mid-L/2-20,len:40,v:0.55};
+    inc.marcha={u0:U(-L/2-20),sg,len:40,v:0.55};
     for(let k=0;k<70;k++) inc.gente.push({mar:true,du:Math.random()*L,lat:(Math.random()-0.5)*(W-2),col:ROPA[k%ROPA.length],ph:Math.random()*6});
     inc.pancartas=[{du:L+0.8,lat:-2.2},{du:L+0.8,lat:2.2},{du:L*0.45,lat:0}];
     inc.banderas=[{du:L*0.7,lat:-3,col:C.red},{du:L*0.25,lat:2.6,col:C.green},{du:L*0.55,lat:3.4,col:0x8a7aa8}];
-    inc.furgon=true;
-    INC_CERRADA.add(ei); bloquea(-1,null,0,e.len); }
-  if(tipo==='cortada'){ const W=e.one?ln*3.1:ln*3.1*2;
-    for(let x=-W/2+0.95;x<W/2;x+=2) pon('valla',mid,x,Math.PI/2);
-    pon('desvio',mid-4,W/2+0.6,Math.PI/2); pon('urbana',mid-8,laneOff(0),0);
-    luz(mid,-W/2+0.95,1.15,AMB,1.2,0); luz(mid,W/2-0.95,1.15,AMB,1.2,0.5);
-    luz(mid-8,laneOff(0)-0.35,1.62,AZ,3.2,0); luz(mid-8,laneOff(0)+0.35,1.62,RO,3.2,0.5);
-    inc.gente.push({u:mid-5,lat:laneOff(0)+1.6,amp:1.5,f:0.07,ph:0,col:GU_BLUE});
-    INC_CERRADA.add(ei); bloquea(-1,null,mid-1,mid+1); }
+    INC_CERRADA.add(ei); for(const p of incBloquea(ei,-1,null,0,e.len)) inc.bloq.push(p); }
+  if(tipo==='cortada'){ const W=e.one?ln*3.1:ln*3.1*2, c0=e.one?0:0;
+    for(let x=-W/2+0.95;x<W/2;x+=2) pon('valla',0,c0+x,Math.PI/2);
+    pon('desvio',-4,W/2+0.6,Math.PI/2); pon('urbana',-8,laneOff(0),0);
+    luz(0,-W/2+0.95,1.15,AMB,1.2,0); luz(0,W/2-0.95,1.15,AMB,1.2,0.5);
+    luz(-8,laneOff(0)-0.35,1.62,AZ,3.2,0); luz(-8,laneOff(0)+0.35,1.62,RO,3.2,0.5);
+    persona(-5,laneOff(0)+1.6,1.5,0.07,0,GU_BLUE);
+    INC_CERRADA.add(ei); bloquea(null,-1,1,true); }
   if(tipo==='averia'){ const lo=laneOff(outer);
-    inc.piezas.push(['utilitario',...at(mid,lo+0.3),C.red]);
-    pon('triangulo',mid-30,lo,Math.PI/2);
-    luz(mid+2,lo-0.55,0.65,AMB,1.4,0); luz(mid+2,lo+1.15,0.65,AMB,1.4,0); luz(mid-1.95,lo-0.55,0.75,AMB,1.4,0); luz(mid-1.95,lo+1.15,0.75,AMB,1.4,0);
-    inc.gente.push({u:mid-3.5,lat:lo+2.6,amp:0.8,f:0.08,ph:0,col:C.ochre});
-    bloquea(0,[outer],mid-6,mid+2.6); }
-  const [cx,cz]=at(mid,0); inc.x=cx; inc.z=cz; inc.i=INC_TIPOS[tipo]??5;
-  INCS.push(inc);
+    pon('utilitario',0,lo+0.3,0,C.red);
+    pon('triangulo',-30,lo,Math.PI/2);
+    luz(2,lo-0.55,0.65,AMB,1.4,0); luz(2,lo+1.15,0.65,AMB,1.4,0); luz(-1.95,lo-0.55,0.75,AMB,1.4,0); luz(-1.95,lo+1.15,0.75,AMB,1.4,0);
+    persona(-3.5,lo+2.6,0.8,0.08,0,C.ochre);
+    bloquea([outer],-6,2.6); }
+  const [cx,cz]=at(0,0); inc.x=cx; inc.z=cz; inc.i=INC_TIPOS[tipo]??5;
+  INCS.push(inc); return inc;
 }
 function incBuildGPU(){
   const P=[],Cc=[],F=[],Ph=[]; for(const inc of INCS) for(const [x,y,z,c,f,ph] of inc.luces){ P.push(x,y,z); Cc.push(...c); F.push(f); Ph.push(ph); }
@@ -1609,6 +1618,74 @@ function incDemo(){
   elegidas.forEach((ei,k)=>incPoner(tipos[k][0],ei,tipos[k][1]));
   incBuildGPU();
 }
+/* --- Incidencias reales: los avisos del Ayuntamiento (/api/incidencias, cada 5 min) situados con el callejero de OSM.
+       El aviso da el sitio en texto: «C. Muntaner a l´altura de C. la Forja tallat al trànsit per obres.» → la calle
+       (Muntaner), el cruce (la Forja), el sentido si lo dice (muntanya, mar, Besòs, Llobregat), la causa y el efecto. --- */
+let CALL=null, callState='none', incLast=-1e9, incFrases=null, INC_N=0, INC_SIN=[];
+const VACIAS=new Set(['carrer','c','cl','avinguda','av','avda','passeig','pg','pl','placa','rda','travessera','trav','rambla','rbla','via','carretera','ctra',
+  'passatge','ptge','baixada','pujada','de','del','dels','la','les','el','els','l','d','i','al','a']);
+const tokens=s=>(s||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[´'’`·]/g,' ').replace(/[^a-z0-9 ]/g,' ').split(/\s+/).filter(w=>w&&!VACIAS.has(w));
+async function loadCallejero(){ callState='loading';
+  try{ const d=await fetch(VIVO+'callejero.json',{cache:'no-cache'}).then(r=>{ if(!r.ok) throw new Error(r.status); return r.json(); });
+    CALL=d.calles.map(([nom,ed])=>({nom,tok:new Set(tokens(nom)),ed})); callState='ready'; okLoad('callejero'); }
+  catch(e){ callState='missing'; retryLater('callejero',()=>{ if(callState==='missing') callState='none'; },e); } }
+// calles cuyo nombre contiene todas las palabras del aviso (primero las que coinciden exactamente)
+function calles(nombre){ const t=tokens(nombre); if(!t.length) return [];
+  const r=CALL.filter(c=>t.every(w=>c.tok.has(w))); r.sort((a,b)=>(a.tok.size-t.length)-(b.tok.size-t.length)); return r.slice(0,6); }
+const nodosDe=c=>{ const s=new Set(); for(const i of c.ed){ s.add(RED.E[i].a); s.add(RED.E[i].b); } return s; };
+// cruce de dos calles: nodo común, o el par de nodos más cercano a menos de 60 m (plazas, calzadas desdobladas)
+function cruce(A,B){
+  for(const a of A) for(const b of B){ const nb=nodosDe(b); for(const n of nodosDe(a)) if(nb.has(n)) return {calle:a,nodo:n}; }
+  let best=null;
+  for(const a of A) for(const b of B){ const nb=[...nodosDe(b)];
+    for(const n of nodosDe(a)) for(const m of nb){ const d=Math.hypot(RED.nx[n]-RED.nx[m],RED.nz[n]-RED.nz[m]); if(d<60&&(!best||d<best.d)) best={calle:a,nodo:n,d}; } }
+  return best; }
+const SENTIT={muntanya:[-0.71,-0.71],mar:[0.71,0.71],besos:[0.71,-0.71],llobregat:[-0.71,0.71]};
+// tramo de la calle que llega al nodo (en el sentido del aviso si lo dice): la escena queda justo antes del cruce
+function junto(calle,nodo,sent){ const E=RED.E; let best=null;
+  for(const i of calle.ed){ const e=E[i]; if(e.a!==nodo&&e.b!==nodo) continue;
+    for(const dir of e.one?[0]:[0,1]){ const hacia=dir?e.a:e.b, desde=dir?e.b:e.a;                 // nodo al que va la marcha
+      const vx=RED.nx[hacia]-RED.nx[desde], vz=RED.nz[hacia]-RED.nz[desde], L=Math.hypot(vx,vz)||1;
+      let p=(hacia===nodo?2:0)+Math.min(1,e.len/60);                                                  // mejor si llega al cruce
+      if(sent) p+=3*(vx*sent[0]+vz*sent[1])/L;
+      if(!best||p>best.p) best={ei:i,dir,p,u:hacia===nodo?(dir?14:e.len-14):(dir?e.len-14:14)}; } }
+  return best; }
+function causaDe(t){ t=t.toLowerCase();
+  return /accident|xoc|col·lisi|atropell/.test(t)?'accidente':/avaria|avariat/.test(t)?'averia':/obres|obra\b|asfaltat|pavimentaci/.test(t)?'obras'
+    :/manifestaci|concentraci|protesta|vaga/.test(t)?'manifestacion':/esdeveniment|cursa|marat|festa|concert|partit|cavalcada|desfilada|fira|rodatge|filmaci/.test(t)?'evento'
+    :/incendi|emergència|inundaci|despreniment|fuita|bombers/.test(t)?'emergencia':'sin_indicar'; }
+function situar(frase){
+  const tramo=frase.match(/^(.+?)\s+de\s+((?:(?!\s+de\s).)+?)\s+fins\s+a\s+(.+?)(?:,|\s+tallat|\s+tallada|\s+restricc|\.|$)/i);
+  const via=tramo?tramo[1]:frase.split(/\s+sentit\s+|\s+a\s+l[´'’]altura|,|\s+tallat|\s+tallada|\s+restricc/i)[0];
+  const alt=frase.match(/a\s+l[´'’]altura\s+(?:de\s+la\s+|del\s+|de\s+|d[´'’])?(.+?)(?:,|\s+tallat|\s+tallada|\s+restricc|\s+per\s+|\.|$)/i);
+  const sm=frase.match(/sentit\s+(muntanya|mar|bes[oò]s|llobregat)/i), sent=sm?SENTIT[tokens(sm[1])[0]]:null;
+  const A=calles(via); if(!A.length) return null;
+  if(tramo){ const c1=cruce(A,calles(tramo[2])), c2=cruce(A,calles(tramo[3]));
+    if(c1&&c2){ const mx=(RED.nx[c1.nodo]+RED.nx[c2.nodo])/2, mz=(RED.nz[c1.nodo]+RED.nz[c2.nodo])/2; let best=null;
+      for(const i of c1.calle.ed){ const e=RED.E[i], d=Math.hypot(e.mx-mx,e.mz-mz); if(!best||d<best.d) best={ei:i,d}; }
+      return best&&{ei:best.ei,dir:0,u:RED.E[best.ei].len/2}; }
+    const c=c1||c2; if(c) return junto(c.calle,c.nodo,sent); }
+  if(alt){ const B=calles(alt[1]), c=B.length?cruce(A,B):null; if(c) return junto(c.calle,c.nodo,sent); }
+  // solo la calle (una plaza, un tramo corto): su tramo más largo, si la calle no es muy grande
+  const a=A[0]; let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9,best=null;
+  for(const i of a.ed){ const e=RED.E[i]; x0=Math.min(x0,e.mx); x1=Math.max(x1,e.mx); z0=Math.min(z0,e.mz); z1=Math.max(z1,e.mz); if(best==null||e.len>RED.E[best].len) best=i; }
+  if(Math.hypot(x1-x0,z1-z0)>500||best==null) return null;                  // calle larga sin cruce: no se sabe dónde
+  return {ei:best,dir:0,u:RED.E[best].len/2}; }
+function incReales(frases){
+  INCS=[]; INC_OBS.clear(); INC_CERRADA.clear(); INC_SIN=[]; INC_N=frases.length;
+  for(const f of frases){ const s=situar(f); if(!s){ INC_SIN.push(f); continue; }
+    const causa=causaDe(f), cortado=/tallat|tallada|tall\b|tancat|tancada/i.test(f);
+    const tipo=causa==='accidente'?'accidente':causa==='averia'?'averia':causa==='manifestacion'?'manifestacion':cortado?'cortada':causa==='obras'?'obras':'cortada';
+    const inc=incPoner(tipo,s.ei,f.replace(/\.$/,''),s); if(causa==='obras') inc.i=0;            // corte por obras: icono de obras
+  }
+  incBuildGPU(); K.dirty(); panel();
+}
+async function loadIncidencias(){
+  try{ const r=await fetch('/api/incidencias',{cache:'no-store'}); if(!r.ok) return; const d=await r.json(), fr=d.frases||[];
+    if(JSON.stringify(fr)===JSON.stringify(incFrases)) return;
+    if(callState==='none') await loadCallejero(); if(!CALL) return;
+    incFrases=fr; incReales(fr); }
+  catch(e){ console.warn('vivo: incidencias',e); } }
 const _ic=new THREE.Color();
 // ¿cae (calle, sentido, carril, posición) dentro de una incidencia? (para no hacer aparecer coches ahí)
 function incDentro(ei,dir,lane,s){ const l=INC_OBS.get(ei); if(!l) return false; const e=RED.E[ei], u=dir?e.len-s:s;
@@ -1626,13 +1703,12 @@ function incStep(now,dt,mpp){
   for(const inc of INCS){ if((inc.x-cam.x)**2+(inc.z-cam.z)**2>R2||!cerca) continue;
     const e=RED.E[inc.ei];
     for(const [k,x,z,a,col] of inc.piezas) put(k,x,z,a,1,col);
-    if(inc.marcha){ const M=inc.marcha, adv=((t-inc.t0)*M.v)%M.len;                       // la marcha avanza despacio y vuelve a empezar
-      const f=Math.min(1,adv/3,(M.len-adv)/3);
-      for(const p of inc.gente){ edgePt(e,M.u0+adv+p.du,p.lat,PQ); const bob=Math.abs(Math.sin(t*3.2+p.ph))*0.05;
-        put(p.ph>3?'gente':'gente2',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2]),f,p.col,0.3+bob); }
-      for(const b of inc.pancartas){ edgePt(e,M.u0+adv+b.du,b.lat,PQ); put('pancarta',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+Math.PI/2+Math.sin(t*1.3+b.lat)*0.08,f,null); }
-      for(const b of inc.banderas){ edgePt(e,M.u0+adv+b.du,b.lat,PQ); put('bandera',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+Math.PI+Math.sin(t*2.1+b.lat)*0.35,f,b.col); }
-      edgePt(e,M.u0+adv-7,1.6,PQ); put('furgonUrbana',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2]),f,null); }
+    if(inc.marcha){ const M=inc.marcha, adv=((t-inc.t0)*M.v)%M.len, g=M.sg, rot=g<0?Math.PI:0;   // la marcha avanza despacio y vuelve a empezar
+      const f=Math.min(1,adv/3,(M.len-adv)/3), en=(d,lat)=>{ edgePt(e,Math.max(0.3,Math.min(e.len-0.3,M.u0+g*(adv+d))),g*lat,PQ); return Math.atan2(-PQ[3],PQ[2])+rot; };
+      for(const p of inc.gente){ const a=en(p.du,p.lat), bob=Math.abs(Math.sin(t*3.2+p.ph))*0.05; put(p.ph>3?'gente':'gente2',PQ[0],PQ[1],a,f,p.col,0.3+bob); }
+      for(const b of inc.pancartas){ const a=en(b.du,b.lat); put('pancarta',PQ[0],PQ[1],a+Math.PI/2+Math.sin(t*1.3+b.lat)*0.08,f,null); }
+      for(const b of inc.banderas){ const a=en(b.du,b.lat); put('bandera',PQ[0],PQ[1],a+Math.PI+Math.sin(t*2.1+b.lat)*0.35,f,b.col); }
+      const a=en(-7,1.6); put('furgonUrbana',PQ[0],PQ[1],a,f,null); }
     else for(const p of inc.gente){ const u=p.u+Math.sin(t*p.f*6.283+p.ph)*p.amp; edgePt(e,u,p.lat,PQ);
       const dir=Math.cos(t*p.f*6.283+p.ph)>=0?0:Math.PI; put('gente',PQ[0],PQ[1],Math.atan2(-PQ[3],PQ[2])+dir,1,p.col,0.3+Math.abs(Math.sin(t*3+p.ph))*0.03); } }
   for(const k in R) setCount(R[k],R[k].n);
@@ -1641,7 +1717,7 @@ function incStep(now,dt,mpp){
   avisoMat.uniforms.time.value=t; avisoMat.uniforms.dpr.value=dpr; avisoMat.uniforms.op.value=Math.min(1,Math.max(0,(mpp-0.45)/0.5)); avisos.visible=mpp>0.45;
   // rótulos (solo en la demostración): qué es cada una
   let used=0;
-  if(INC_DEMO&&mpp<1.5) for(const inc of INCS){ _p.set(inc.x,6,inc.z).project(K.cam); if(Math.abs(_p.x)>1||Math.abs(_p.y)>1) continue;
+  if(INC_DEMO?mpp<1.5:mpp<0.6) for(const inc of INCS){ _p.set(inc.x,6,inc.z).project(K.cam); if(Math.abs(_p.x)>1||Math.abs(_p.y)>1) continue;
     let el=incLbl[used]; if(!el){ el=document.createElement('span'); el.style.cssText='position:absolute;transform:translate(-50%,-140%);font:600 12px/1.25 "EB Garamond",serif;color:#3a2616;background:#f3ead6;padding:1px 6px;border:1px solid #a9483a;border-radius:2px;white-space:nowrap'; busLblBox.appendChild(el); incLbl.push(el); }
     el.textContent=inc.texto; el.style.left=((_p.x+1)/2*innerWidth)+'px'; el.style.top=((1-_p.y)/2*innerHeight)+'px'; el.style.display='block'; used++; }
   for(let i=used;i<incLbl.length;i++) incLbl[i].style.display='none';
@@ -1683,6 +1759,7 @@ function frame(now,dt){
   if(RP&&mpp>=PARK_MPP) for(const r of RP){ for(const im of r.hi) im.visible=false; for(const im of r.lo) im.visible=false; }
   if(PEDR){ const hi=mpp<PED_HI; for(const r of PEDR){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   if(INC_DEMO&&!incReady&&RED&&tramState!=='loading'&&tramState!=='none'){ incReady=true; incDemo(); }
+  if(!INC_DEMO&&RED&&now-incLast>120000){ incLast=now; loadIncidencias(); }       // avisos reales del Ayuntamiento, cada 2 min
   const incA=INCS.length?incStep(now,dt,mpp):false;
   anim=anim||cyc||ped||incA;
   vehGroup.visible=anim; if(!anim||!BUS) hideBusLabels();
@@ -1694,7 +1771,7 @@ window.__vivo={
   wxModes:Object.keys(WX_SIMS), get wxSim(){ return wxSim; }, setWx:k=>setWxSim(k),
   setOn:(k,v)=>{ ON[k]=!!v; K.dirty(); panel(); }, get ON(){ return {...ON}; }, get peds(){ return peds; }, isRoad:(x,z)=>CALZ?isRoad(x,z):null, pedXY:p=>{ const o=new Float32Array(4); pedPos(p,o); return [o[0],o[1]]; },   // el test apaga y enciende capas sin tocar lo guardado
   wxSnap:()=>{ wxT=wxTarget(); for(const k in WXV) WXV[k]=wxT[k]; K.dirty(); },
-  wx:()=>({...WXV,sim:wxSim,t:wxT,m1:wxM1.visible,m2:wxM2.visible,u:Object.fromEntries(Object.entries(wxMul.uniforms).map(([k,v])=>[k,typeof v.value==='number'?v.value:'·']))}),stats:()=>({lamps:lamps&&lamps.visible?nLamps:0,lmLights:lamps&&lamps.visible?nLmLights:0,ribbons:!!(ribbon&&ribbonGroup.visible),tramos:TRAF?TRAF.size:0,tramosState,bikeStations:BIKE&&BIKE.estaciones?BIKE.estaciones.length:0,bars:!!(bars&&bikeGroup.visible),wxM1:wxM1.visible,wxM2:wxM2.visible,manifest:!manifestErr,capas:manifest&&manifest.capas?Object.fromEntries(Object.entries(manifest.capas).map(([k,c])=>[k,c.estado||''])):{},cars:nCars,stopped:nStopped,parked:nParked,buses:nBuses,busAll:nBusAll,incs:INCS.map(i=>[i.tipo,Math.round(i.x),Math.round(i.z)]),tram:nTram,tramAll:nTramAll,tramWait:nTramWait,tramState,busLight:nBusLight,busJunc:nBusJunc,cyc:nCyc,cycLight:nCycLight,peds:nPed,pedWait:nPedWait,pedTarget,calzada:calzState,metro:nMetroAll,red:redState,bus:busState,bici:bkState,err:simErr,loadErr:{...LOADERR}}),get RED(){return RED;},get cand(){return cand;},get area(){return area;},get candTot(){return candTot;},get RC(){return RC;},get RB(){return RB;},get TRAF(){return TRAF;},get busActive(){return busActive;},get cycs(){return cycs;},get cyc(){ return {bkState,queue:cycQueue.length,cycs:cycs.length,area:cycArea,bike:!!BIKE,seen:cycSeen,ev:BIKE&&BIKE.eventos&&BIKE.eventos.length,rbc:!!RBC,cerca:cycs.filter(c=>c.x!==undefined).map(c=>[c.x,c.z,Math.hypot(c.x-cycArea.x,c.z-cycArea.z)]).sort((a,b)=>a[2]-b[2]).slice(0,3)}; },busXY(tr){ const o=new Float32Array(4); busPos(tr,secNow(),o); return [o[0],o[1]]; }};   // inspección
+  wx:()=>({...WXV,sim:wxSim,t:wxT,m1:wxM1.visible,m2:wxM2.visible,u:Object.fromEntries(Object.entries(wxMul.uniforms).map(([k,v])=>[k,typeof v.value==='number'?v.value:'·']))}),stats:()=>({lamps:lamps&&lamps.visible?nLamps:0,lmLights:lamps&&lamps.visible?nLmLights:0,ribbons:!!(ribbon&&ribbonGroup.visible),tramos:TRAF?TRAF.size:0,tramosState,bikeStations:BIKE&&BIKE.estaciones?BIKE.estaciones.length:0,bars:!!(bars&&bikeGroup.visible),wxM1:wxM1.visible,wxM2:wxM2.visible,manifest:!manifestErr,capas:manifest&&manifest.capas?Object.fromEntries(Object.entries(manifest.capas).map(([k,c])=>[k,c.estado||''])):{},cars:nCars,stopped:nStopped,parked:nParked,buses:nBuses,busAll:nBusAll,incs:INCS.map(i=>[i.tipo,Math.round(i.x),Math.round(i.z),i.texto]),incSin:INC_SIN,tram:nTram,tramAll:nTramAll,tramWait:nTramWait,tramState,busLight:nBusLight,busJunc:nBusJunc,cyc:nCyc,cycLight:nCycLight,peds:nPed,pedWait:nPedWait,pedTarget,calzada:calzState,metro:nMetroAll,red:redState,bus:busState,bici:bkState,err:simErr,loadErr:{...LOADERR}}),get RED(){return RED;},get cand(){return cand;},get area(){return area;},get candTot(){return candTot;},get RC(){return RC;},get RB(){return RB;},get TRAF(){return TRAF;},get busActive(){return busActive;},get cycs(){return cycs;},get cyc(){ return {bkState,queue:cycQueue.length,cycs:cycs.length,area:cycArea,bike:!!BIKE,seen:cycSeen,ev:BIKE&&BIKE.eventos&&BIKE.eventos.length,rbc:!!RBC,cerca:cycs.filter(c=>c.x!==undefined).map(c=>[c.x,c.z,Math.hypot(c.x-cycArea.x,c.z-cycArea.z)]).sort((a,b)=>a[2]-b[2]).slice(0,3)}; },busXY(tr){ const o=new Float32Array(4); busPos(tr,secNow(),o); return [o[0],o[1]]; }};   // inspección
 // Todo lo que hace falta para acercarse sin sorpresas se carga ya, y index.html mantiene la pantalla de carga hasta que
 // termine (antes, si se hacía zoom en los primeros segundos, coches y personas arrancaban con datos a medio cargar)
 K.listo=Promise.all([poll(),
