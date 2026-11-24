@@ -421,8 +421,9 @@ function step(dt){
     if(v.v>0.5){ if(e.len-v.s<4) busy.set(v.dir?e.a:e.b,v);           // entrando en el cruce (solo si se mueve:
                  else if(v.s<5) busy.set(v.dir?e.b:e.a,v); } }          //  un coche parado en cola no bloquea el cruce)
   for(const l of lanesMap.values()){ l.sort((a,b)=>a.s-b.s); for(let i=0;i<l.length;i++) l[i].ahead=l[i+1]||null; }
-  // 2) mover
-  for(const r of all) for(const v of r.list) if(!v.dead) drive(v,dt);
+  // 2) mover (un valor no numérico —NaN— dejaría el coche invisible y contagiaría a los de detrás: se recoloca)
+  for(const r of all) for(const v of r.list) if(!v.dead){ drive(v,dt);
+    if(!(Number.isFinite(v.s)&&Number.isFinite(v.v))){ v.v=0; v.s=0; v.ahead=null; respawn(v); DIAG.nanCoches++; } }
   // 3) escribir los buffers de instancias
   nCars=0; if(!BUS) nBuses=0; nStopped=0; gridReset(carGrid);
   for(const r of all){
@@ -777,6 +778,7 @@ function cycStep(now,dt){
         const g=stopForLight(c.x,c.z,c.ang,0.9,c.cv||c.v,2.5,20,6); if(g>=0&&g<ds){ ds=Math.max(0,g); nCycLight++; } }
       if(c.x!==undefined&&TRAM){ const g=tramParar(c.x,c.z,Math.cos(c.ang),Math.sin(c.ang),Math.max(4,ds+3),1.8);   // tranvía: prioridad
         if(g>=0&&g<ds){ ds=Math.max(0,g); nTramWait++; } }
+      if(!Number.isFinite(ds)){ ds=0; DIAG.nanBicis++; }                                // valor roto: no avanza (y no se pierde)
       c.cv=ds/Math.max(dt,1e-3); c.s+=ds;
       if(c.s>=c.len-0.3){ c.s=c.len; c.fade=0.6; } }
     const n=c.cu.length; let lo=0,hi=n-2; while(lo<hi){ const m=(lo+hi+1)>>1; if(c.cu[m]<=c.s) lo=m; else hi=m-1; }
@@ -939,6 +941,7 @@ function pedMove(p,dt){
   if(pedTram(p,ds)) return;
   if(p.nx&&p.nx.sig&&!p.go){ const stop=p.W-p.back;                           // semáforo: espera en el bordillo al verde de su sentido
     if(p.s+ds>=stop){ if(pedGreen(p.nx.node,p.nx.ang)>p.nx.L/p.v+1) p.go=true; else{ ds=Math.max(0,stop-p.s); p.waiting=true; nPedWait++; } } }
+  if(!Number.isFinite(ds)){ ds=0; DIAG.nanGente++; }
   p.s+=ds;
   if(p.s>=p.W){ if(!p.nx) planNext(p); p.tr={...p.nx,s:0}; p.go=false; }
 }
@@ -1752,9 +1755,27 @@ let lastPanel=0, simErr='', lastStep=0;
 // Errores: se muestran en el panel y se envían una vez por capa y visita al Worker (/api/error, sin datos personales:
 // mensaje, navegador y zoom), para poder arreglar fallos que solo pasan en algún equipo
 const enviados=new Set();
-function fallo(donde,e){
-  const msg=String(e&&e.stack||e).slice(0,600);
-  if(!simErr){ simErr=donde+': '+msg.slice(0,280); console.error('vivo:',donde,e); panel(); }
+// Diagnóstico sin error: si a pie de calle hay calles cargadas pero ningún coche (o la escena de una incidencia a la vista
+// no se dibuja) durante unos segundos, se envía una foto del estado al Worker (una vez por visita)
+const DIAG={nanCoches:0,nanBicis:0,nanGente:0,sinCoches:0,sinEscena:0};
+function vigilar(now,dt,mpp){
+  const sinCoches=ON.vehiculos&&RED&&mpp<VEH_MPP*0.8&&candTot>20&&nCars===0;
+  DIAG.sinCoches=sinCoches?DIAG.sinCoches+dt:0;
+  let escena=false; const t=K.controls.target;
+  for(const inc of INCS) if(Math.hypot(inc.x-t.x,inc.z-t.z)<60) escena=true;
+  const sinEscena=escena&&mpp<VEH_MPP*0.8&&!(IR&&Object.values(IR).some(r=>r.n>0)&&incGroup.visible);
+  DIAG.sinEscena=sinEscena?DIAG.sinEscena+dt:0;
+  const que=DIAG.sinCoches>4?'sin coches':DIAG.sinEscena>4?'sin escena de incidencia':(DIAG.nanCoches||DIAG.nanBicis||DIAG.nanGente)?'valores NaN':'';
+  if(!que||enviados.has('diag:'+que)) return; enviados.add('diag:'+que);
+  const cuenta=rs=>rs?rs.reduce((s,r)=>s+r.list.length,0):null;
+  fallo('diag:'+que,{stack:JSON.stringify({que,mpp:+mpp.toFixed(3),zoom:+K.cam.zoom.toFixed(4),t:[+t.x.toFixed(0),+t.z.toFixed(0)],
+    area:{x:+area.x.toFixed(0),z:+area.z.toFixed(0),r:+(area.r||0).toFixed(0)},candTot:+candTot.toFixed(1),listas:{RC:cuenta(RC),RB:cuenta(RB)},nCars,nBuses,
+    vehGroup:vehGroup.visible,incGroup:incGroup.visible,incs:INCS.length,lastStep:Math.round(now-lastStep),firstFill,saltoHasta:Math.round(saltoHasta-now),
+    nan:{c:DIAG.nanCoches,b:DIAG.nanBicis,g:DIAG.nanGente},simErr:simErr.slice(0,120),
+    ejemplo:RC&&RC[0]&&RC[0].list[0]?(({e,s,v,lane,dir,fade,age})=>({e,s,v,lane,dir,fade,age}))(RC[0].list[0]):null})},true); }
+function fallo(donde,e,soloInforme){
+  const msg=String(e&&e.stack||e).slice(0,soloInforme?1800:600);
+  if(!simErr&&!soloInforme){ simErr=donde+': '+msg.slice(0,280); console.error('vivo:',donde,e); panel(); }
   if(enviados.has(donde)) return; enviados.add(donde);
   try{ const cuerpo=JSON.stringify({donde,msg,ua:navigator.userAgent,mpp:K.mppNow&&+K.mppNow().toFixed(3),embed:!!window.EMBED,
       gl:(()=>{ try{ const g=K.renderer.getContext(), x=g.getExtension('WEBGL_debug_renderer_info'); return x?g.getParameter(x.UNMASKED_RENDERER_WEBGL):''; }catch(_){ return ''; } })(),ts:new Date().toISOString()});
@@ -1805,6 +1826,7 @@ function frame(now,dt){
   anim=anim||cyc||ped||incA;
   vehGroup.visible=anim; if(!anim||!BUS) hideBusLabels();
   if(now-lastPanel>2000){ lastPanel=now; if(anim||redState==='loading') panel(); }
+  capa('vigilancia',()=>vigilar(now,dt,mpp));
   return anim||wxAnim;
 }
 window.__vivo={
