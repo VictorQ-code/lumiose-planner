@@ -245,14 +245,20 @@ function updateArea(){
   const t=K.controls.target, cam=K.cam, hh=(cam.top-cam.bottom)/cam.zoom/2, hw=(cam.right-cam.left)/cam.zoom/2;
   // la vista está inclinada: en vertical se ve más suelo que alto tiene la pantalla
   const stretch=1/Math.max(0.35,Math.cos(K.controls.getPolarAngle?K.controls.getPolarAngle():0.9));
-  const r=Math.min(1600,Math.max(220,Math.max(hh*stretch,hw)*1.15));
+  let r=Math.min(1600,Math.max(220,Math.max(hh*stretch,hw)*1.15));
   if(!candDirty&&!parkDirty&&area.r&&Math.hypot(t.x-area.x,t.z-area.z)<r*0.2&&Math.abs(r-area.r)<area.r*0.25) return false;
   if(area.r&&Math.hypot(t.x-area.x,t.z-area.z)>area.r) firstFill=true;   // salto lejos: llenar de golpe
-  area={x:t.x,z:t.z,r}; candDirty=false;
-  const {E,cells,CELL}=RED; cand=[]; busCand=[];
-  for(let ix=Math.floor((t.x-r)/CELL);ix<=Math.floor((t.x+r)/CELL);ix++) for(let iz=Math.floor((t.z-r)/CELL);iz<=Math.floor((t.z+r)/CELL);iz++){
-    const l=cells.get(ix+','+iz); if(l) for(const i of l) cand.push(i); }
-  cum=new Float64Array(cand.length); let s=0; cand.forEach((i,k)=>{ s+=E[i].len*dens(E[i]); cum[k]=s; }); candTot=s;
+  candDirty=false;
+  const {E,cells,CELL}=RED;
+  const juntar=r=>{ cand=[]; for(let ix=Math.floor((t.x-r)/CELL);ix<=Math.floor((t.x+r)/CELL);ix++) for(let iz=Math.floor((t.z-r)/CELL);iz<=Math.floor((t.z+r)/CELL);iz++){
+      const l=cells.get(ix+','+iz); if(l) for(const i of l) cand.push(i); }
+    let s=0; for(const i of cand) s+=E[i].len*dens(E[i]); return s; };
+  // de lejos caben más coches de los que se dibujan (tope MOVE_CAP): se encoge el círculo hacia lo que se ve
+  // para que no se repartan por fuera de la pantalla (como mucho hasta el ancho visible)
+  let s=juntar(r);
+  if(s>MOVE_CAP*1.2){ const r2=Math.max(Math.min(r,hw*1.05),r*Math.sqrt(MOVE_CAP*1.2/s)); if(r2<r*0.95){ r=r2; s=juntar(r); } }
+  area={x:t.x,z:t.z,r}; busCand=[];
+  cum=new Float64Array(cand.length); s=0; cand.forEach((i,k)=>{ s+=E[i].len*dens(E[i]); cum[k]=s; }); candTot=s;
   for(const i of cand) if(E[i].cls<=4) busCand.push(i);
   busCum=new Float64Array(busCand.length); let sb=0; busCand.forEach((i,k)=>{ sb+=E[i].len*(E[i].cls<=3?1:.4); busCum[k]=sb; });
   return true;
