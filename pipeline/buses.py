@@ -33,6 +33,8 @@ from geo import a_local  # noqa: E402
 GTFS = BRONZE / "tmb" / "gtfs.zip"
 SALIDA = GOLD / "barcelona" / "vivo" / "buses.json"
 METRO = GOLD / "barcelona" / "vivo" / "metro_horario.json"
+AMB = BRONZE / "amb" / "gtfs.zip"
+AMB_URL = "https://www.ambmobilitat.cat/OpenData/google_transit.zip"
 
 
 def segundos(h: str) -> int | None:
@@ -88,9 +90,9 @@ def proyectar(pts: list, acum: list, x: float, z: float, desde: float) -> float:
 IDS = ("route_id", "trip_id", "shape_id", "service_id", "stop_id")
 
 
-def construir(tipos: set, salida: Path, que: str, zips: list | None = None, fuente: str = "TMB (GTFS)") -> None:
+def construir(tipos: set, salida: Path, que: str, zips: list | None = None, fuente: str = "TMB (GTFS)", filtro=None) -> None:
     """zips: [(ruta del GTFS, prefijo)]; con varios (p. ej. las dos redes de tranvía) los identificadores llevan el
-    prefijo de su red, porque se repiten entre ellas."""
+    prefijo de su red, porque se repiten entre ellas. filtro(fila de routes.txt) -> bool elige qué líneas entran."""
     t0 = time.time()
     zips = zips or [(GTFS, "")]
     for zp, _ in zips:
@@ -109,7 +111,7 @@ def construir(tipos: set, salida: Path, que: str, zips: list | None = None, fuen
                             r[k] = pre + r[k]
                 yield r
 
-    rutas = {r["route_id"]: r for r in leer("routes.txt") if r["route_type"] in tipos}
+    rutas = {r["route_id"]: r for r in leer("routes.txt") if r["route_type"] in tipos and (filtro is None or filtro(r))}
     viajes = {t["trip_id"]: t for t in leer("trips.txt") if t["route_id"] in rutas}
     log(f"{que}: {len(rutas)} líneas y {len(viajes):,} expediciones en el GTFS")
 
@@ -228,8 +230,22 @@ def construir(tipos: set, salida: Path, que: str, zips: list | None = None, fuen
     log(f"escrito vivo/{salida.name} ({salida.stat().st_size / 1e6:.1f} MB) en {time.time() - t0:.0f} s")
 
 
+def bajar_amb() -> Path:
+    """GTFS abierto del AMB (sin claves). De él solo se usan las líneas NitBus (N0–N28): el bus nocturno no es de TMB."""
+    import requests
+    if not AMB.exists() or time.time() - AMB.stat().st_mtime > 7 * 86400:
+        r = requests.get(AMB_URL, timeout=120, headers={"user-agent": "lumiose-planner (portfolio, victorquero.dev)"})
+        r.raise_for_status()
+        AMB.parent.mkdir(parents=True, exist_ok=True)
+        AMB.write_bytes(r.content)
+        log(f"AMB: GTFS descargado ({len(r.content) / 1e6:.1f} MB)")
+    return AMB
+
+
 def main() -> None:
-    construir({"3"}, SALIDA, "bus")
+    # buses de TMB + NitBus del AMB (de noche, cuando los de TMB se retiran)
+    construir({"3"}, SALIDA, "bus", zips=[(GTFS, ""), (bajar_amb(), "AMB:")], fuente="TMB y AMB-NitBus (GTFS)",
+              filtro=lambda r: not r["route_id"].startswith("AMB:") or (r.get("route_short_name") or "").startswith("N"))
     construir({"1"}, METRO, "metro")
 
 

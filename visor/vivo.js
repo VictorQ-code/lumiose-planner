@@ -112,6 +112,8 @@ function turistico(){ const W=2.55, P=[...bodyBus(-5.5,5.5,C.wine,{top:2.25,H:2.
   [bx(-5.5,-5.36,2.7,3.55,W),C.wine], [bx(5.36,5.5,2.7,3.85,W),C.glass,.55], [bx(2.3,5.5,3.85,3.95,W),C.wine], ...both(s=>[bx(2.3,2.42,3.55,3.85,.1,s*(W/2-.08)),C.wine])];
   for(let x=-4.8;x<4.8;x+=.85) for(const z of [-.62,.62]) P.push([bx(x-.22,x+.18,2.7,3.12,.85,z),C.cream,.85]);
   return [...P, ...wheels([3.6,-3.0],.5,.3,W)]; }
+const NIT_BLUE=0x4f74a3;
+function nitbus(){ return [...bodyBus(-6,6,NIT_BLUE,{doors:[4.9,0.6,-3.6]}), [bx(-6,6,1.15,1.26,2.57),0xe8c25a], [bx(-1.2,2.6,3.0,3.32,1.8),C.gray], ...wheels([3.7,-2.7],.5,.3,2.55)]; }
 function electrico(){ const W=2.55; return [...bodyBus(-6,6,C.teal,{doors:[4.9,0.6,-3.6]}), [bx(-6,6,1.15,1.26,W+.02),C.charge],
   [bx(-4.6,-0.6,3.0,3.36,2.0),C.gray], [bx(0.9,2.3,3.0,3.14,1.3),C.black,.7],
   ...both(s=>[new THREE.BoxGeometry(1.5,.07,.07).rotateZ(.55).translate(1.3,3.5,s*.45),C.black,.7]),
@@ -142,7 +144,8 @@ const CAR_MODELS=[
   {name:'furgoneta',w:8,len:5.2,parts:()=>furgoneta(BODY),pal:[C.white,C.white,C.silver,C.ochre]}];
 const BUS_MODELS=[
   {name:'estándar',w:45,lowCol:C.red,len:12.2,parts:estandar,maxCls:6},{name:'articulado',w:25,lowCol:C.red,len:18.3,parts:articulado,maxCls:3},
-  {name:'de barrio',w:10,lowCol:C.white,len:8.2,parts:barrio,maxCls:7},{name:'eléctrico',w:15,lowCol:C.teal,len:12.2,parts:electrico,maxCls:6},{name:'turístico',w:5,lowCol:C.wine,len:11.2,parts:turistico,maxCls:3}];
+  {name:'de barrio',w:10,lowCol:C.white,len:8.2,parts:barrio,maxCls:7},{name:'eléctrico',w:15,lowCol:C.teal,len:12.2,parts:electrico,maxCls:6},{name:'turístico',w:5,lowCol:C.wine,len:11.2,parts:turistico,maxCls:3},
+  {name:'NitBus',w:0,lowCol:NIT_BLUE,len:12.2,parts:nitbus,maxCls:6}];        // bus nocturno del AMB (solo con su horario, nunca simulado)
 
 function instGeo(base,attrs){ const g=new THREE.InstancedBufferGeometry(); if(base.index) g.setIndex(base.index);
   for(const k in base.attributes) g.setAttribute(k,base.attributes[k]); for(const k in attrs) g.setAttribute(k,attrs[k]); g.instanceCount=0; return g; }
@@ -463,6 +466,7 @@ function prepBuses(d){
     if(du>maxDur) maxDur=du; });
   trips.sort((a,b)=>a.st-b.st);
   const modelOf=(name,i)=>{ const h=hash(i*0.37,i*1.13);                   // índice en BUS_MODELS
+    if(/^N\d/.test(name)) return 5;                                            // NitBus (AMB)
     if(h<0.15) return 3;                                                       // eléctrico
     if(/^[HVD]/.test(name)) return h<0.65?1:0;                               // Nova Xarxa: muchos articulados
     if(/^1\d\d$/.test(name)) return 2;                                        // bus de barrio
