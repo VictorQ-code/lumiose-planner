@@ -1482,7 +1482,9 @@ function pancarta(){ return [...both(s=>[bx(-.03,.03,0,2.3,.05,0).translate(s*1.
 function bandera(){ return [[bx(-.025,.025,0,2.6,.05),C.dark],[bx(.03,.95,1.95,2.55,.03),BODY]]; }
 function desvio(){ return [[bx(-.04,.04,0,2.0,.06),C.gray],[new THREE.CylinderGeometry(.42,.42,.05,16).rotateX(Math.PI/2).translate(0,2.0,0),C.white],
   [prof([[-.26,1.96],[.12,1.96],[.12,1.86],[.3,2.02],[.12,2.18],[.12,2.08],[-.26,2.08]],.06,.03),GU_BLUE]]; }
-const PROP={valla,cono,arena,urbana,furgonUrbana,triangulo,pancarta,bandera,desvio};
+// barrera de plástico (de las que se llenan de agua): voluminosa, se ve bien también desde arriba
+function barrera(col){ return ()=>[[bx(-.62,.62,0,.62,.42),col],[bx(-.58,.58,.62,.8,.3),col],[bx(-.62,.62,.38,.5,.44),col===C.white?C.red:C.white]]; }
+const PROP={valla,cono,arena,urbana,furgonUrbana,triangulo,pancarta,bandera,desvio,barreraR:barrera(C.red),barreraB:barrera(C.white)};
 let IR=null;                                        // renderers de las piezas (se crean al primer uso)
 function incRenderers(){ if(IR) return IR; IR={};
   for(const k in PROP) IR[k]=makeRenderer({name:k,w:0,len:2,parts:PROP[k],low:PROP[k]},120);
@@ -1580,11 +1582,12 @@ function incPoner(tipo,ei,texto,o){
     inc.banderas=[{du:L*0.7,lat:-3,col:C.red},{du:L*0.25,lat:2.6,col:C.green},{du:L*0.55,lat:3.4,col:0x8a7aa8}];
     INC_CERRADA.add(ei); for(const p of incBloquea(ei,-1,null,0,e.len)) inc.bloq.push(p); }
   if(tipo==='cortada'){ const W=e.one?ln*3.1:ln*3.1*2, c0=e.one?0:0;
-    for(let x=-W/2+0.95;x<W/2;x+=2) pon('valla',0,c0+x,Math.PI/2);
-    pon('desvio',-4,W/2+0.6,Math.PI/2); pon('urbana',-8,laneOff(0),0);
+    let k=0; for(let x=-W/2+0.7;x<=W/2-0.6;x+=1.3) pon(k++%2?'barreraB':'barreraR',0,c0+x,Math.PI/2);    // barreras de lado a lado
+    for(let x=-W/2+1.2;x<W/2-0.8;x+=2.2) pon('cono',-3,c0+x,0);
+    pon('desvio',-5,W/2+0.6,Math.PI/2); pon('urbana',-9,laneOff(0),0);
     luz(0,-W/2+0.95,1.15,AMB,1.2,0); luz(0,W/2-0.95,1.15,AMB,1.2,0.5);
-    luz(-8,laneOff(0)-0.35,1.62,AZ,3.2,0); luz(-8,laneOff(0)+0.35,1.62,RO,3.2,0.5);
-    persona(-5,laneOff(0)+1.6,1.5,0.07,0,GU_BLUE);
+    luz(-9,laneOff(0)-0.35,1.62,AZ,3.2,0); luz(-9,laneOff(0)+0.35,1.62,RO,3.2,0.5);
+    persona(-6,laneOff(0)+1.6,1.5,0.07,0,GU_BLUE);
     INC_CERRADA.add(ei); bloquea(null,-1,1,true); }
   if(tipo==='averia'){ const lo=laneOff(outer);
     pon('utilitario',0,lo+0.3,0,C.red);
@@ -1723,8 +1726,10 @@ function incStep(now,dt,mpp){
   avisoMat.uniforms.time.value=t; avisoMat.uniforms.dpr.value=dpr; avisoMat.uniforms.op.value=Math.min(1,Math.max(0,(mpp-0.45)/0.5)); avisos.visible=mpp>0.45;
   // rótulos (solo en la demostración): qué es cada una
   let used=0;
-  if(INC_DEMO?mpp<1.5:mpp<0.6) for(const inc of INCS){ _p.set(inc.x,6,inc.z).project(K.cam); if(Math.abs(_p.x)>1||Math.abs(_p.y)>1) continue;
-    let el=incLbl[used]; if(!el){ el=document.createElement('span'); el.style.cssText='position:absolute;transform:translate(-50%,-140%);font:600 12px/1.25 "EB Garamond",serif;color:#3a2616;background:#f3ead6;padding:1px 6px;border:1px solid #a9483a;border-radius:2px;white-space:nowrap'; busLblBox.appendChild(el); incLbl.push(el); }
+  if(INC_DEMO?mpp<1.5:mpp<0.6) for(const inc of INCS){ _p.set(inc.x,0,inc.z).project(K.cam); if(Math.abs(_p.x)>1||Math.abs(_p.y)>1) continue;
+    const yS=(1-_p.y)/2*innerHeight; _p.set(inc.x,4,inc.z).project(K.cam); const alto=Math.max(0,yS-(1-_p.y)/2*innerHeight);   // 4 m en píxeles
+    let el=incLbl[used]; if(!el){ el=document.createElement('span'); el.style.cssText='position:absolute;transform:translate(-50%,-100%);font:600 11px/1.2 "EB Garamond",serif;color:#3a2616;background:rgba(243,234,214,.92);padding:1px 5px;border:1px solid #a9483a;border-radius:2px;white-space:nowrap;max-width:46vw;overflow:hidden;text-overflow:ellipsis'; busLblBox.appendChild(el); incLbl.push(el); }
+    el.style.marginTop=(-alto*2.5-14)+'px';                                       // por encima de la escena, sin taparla
     el.textContent=inc.texto; el.style.left=((_p.x+1)/2*innerWidth)+'px'; el.style.top=((1-_p.y)/2*innerHeight)+'px'; el.style.display='block'; used++; }
   for(let i=used;i<incLbl.length;i++) incLbl[i].style.display='none';
   return true;
