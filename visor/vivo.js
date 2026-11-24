@@ -619,11 +619,15 @@ function queueBikeEvents(d){
 }
 // Arranque en caliente: los viajes que ya estarían en marcha al abrir el mapa, al ritmo real de salidas
 // (cogidas en el último minuto × ~12 min de viaje medio), en estaciones cercanas y en un punto al azar de su trayecto.
-function warmStart(){
+// Se repite en cada zona nueva a la que se va (saltando o arrastrando lejos): así ninguna calle está vacía al llegar.
+const warmSpots=[];
+function warmStart(){ const c=K.intro||K.controls.target; warmAt(c.x,c.z,K.intro?1500:3200); }   // alrededor del punto al que vuela la entrada, si lo hay
+function warmAt(x,z,R){
+  warmSpots.push({x,z});
   const T=BIKE.totales||{}, st=BIKE.estaciones, now=performance.now();
   // Al abrir solo hay una lectura de Bicing (sin cogidas que comparar): se usa el ritmo típico de Barcelona,
-  // ~55 bicis cogidas por minuto en hora punta, según la hora. Alrededor del punto al que vuela la entrada, si lo hay.
-  const c0=K.intro||K.controls.target, R=K.intro?1500:3200, cerca=st.filter(e=>Math.hypot(e[1]-c0.x,e[2]-c0.z)<R);
+  // ~55 bicis cogidas por minuto en hora punta, según la hora.
+  const cerca=st.filter(e=>Math.hypot(e[1]-x,e[2]-z)<R);
   const cogidas=T.cogidas||Math.round(55*PHOUR[Math.floor(horaBcn())%24]);
   const n=Math.min(180,Math.round(cogidas*12*cerca.length/Math.max(1,st.length)));
   for(let i=0;i<n;i++){ const e=cerca[(Math.random()*cerca.length)|0]; if(e) cycQueue.push({at:now,sale:true,warm:true,ele:Math.random()<(T.electricas||1)/((T.mecanicas||1)+(T.electricas||1)),x:e[1],z:e[2]}); }
@@ -641,6 +645,8 @@ function spawnCyclist(ev){
 function cycStep(now,dt){
   const t=K.controls.target, cam=K.cam, hh=(cam.top-cam.bottom)/cam.zoom/2, hw=(cam.right-cam.left)/cam.zoom/2;
   cycArea.x=t.x; cycArea.z=t.z; cycArea.r=Math.min(1600,Math.max(220,Math.max(hh*1.6,hw)*1.15));
+  if(!warmSpots.some(s=>Math.hypot(s.x-t.x,s.z-t.z)<1200)){                         // zona nueva: los viajes que ya estarían en marcha aquí
+    cycQueue=cycQueue.filter(q=>!q.warm||Math.hypot(q.x-t.x,q.z-t.z)<3200); warmAt(t.x,t.z,1500); }
   let budget=cycs.length<40?3:1;                                                     // una ruta nueva por fotograma (A* no es gratis)
   while(cycQueue.length&&budget>0){ let i=cycQueue.findIndex(q=>q.at<=now); if(i<0) break; const ev=cycQueue.splice(i,1)[0];
     const d=Math.hypot(ev.x-cycArea.x,ev.z-cycArea.z);
