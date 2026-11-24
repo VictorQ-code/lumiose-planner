@@ -1519,14 +1519,17 @@ function iconAtlas(){ const S=96, cv=document.createElement('canvas'); cv.width=
     g.restore(); }
   const t=new THREE.CanvasTexture(cv); t.minFilter=THREE.LinearFilter; return t; }
 const avisoMat=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthWrite:false,
-  uniforms:{time:{value:0},atlas:{value:null},dpr:{value:1},op:{value:1}},
-  vertexShader:`uniform float time,dpr; attribute float aI; attribute float aPh; varying float vI; varying float vP;
-    void main(){ gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); vI=aI; vP=fract(time*0.6+aPh); gl_PointSize=58.*dpr; }`,
-  fragmentShader:`uniform sampler2D atlas; uniform float op; varying float vI; varying float vP;
+  uniforms:{time:{value:0},atlas:{value:null},dpr:{value:1},op:{value:1},tgt:{value:new THREE.Vector2()},mpp:U.mpp},
+  // siempre a la vista, a cualquier zoom; solo se apaga el de la incidencia que ya se ve de cerca (su escena está delante)
+  vertexShader:`uniform float time,dpr,mpp; uniform vec2 tgt; attribute float aI; attribute float aPh; varying float vI; varying float vP; varying float vF;
+    void main(){ gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.); vI=aI; vP=fract(time*0.6+aPh);
+      float d=distance(position.xz,tgt); vF=1.-(1.-smoothstep(0.35,0.6,mpp))*(1.-smoothstep(120.,220.,d));
+      gl_PointSize=vF>0.01?(mpp<1.?46.:58.)*dpr:0.; }`,
+  fragmentShader:`uniform sampler2D atlas; uniform float op; varying float vI; varying float vP; varying float vF;
     void main(){ vec2 p=gl_PointCoord-.5; float r=length(p)*2.;
       float ring=smoothstep(0.035,0.,abs(r-(0.55+0.45*vP)))*(1.-vP)*0.8;              // anillo que se abre y se apaga
       vec2 uv=vec2((vI+0.5+p.x*1.35)/6.,0.5-p.y*1.35); vec4 ic=(abs(p.x)<0.37&&abs(p.y)<0.37)?texture2D(atlas,uv):vec4(0.);
-      vec3 col=mix(vec3(0.66,0.28,0.23),ic.rgb,ic.a); float a=max(ic.a,ring); if(a<0.02) discard; gl_FragColor=vec4(col,a*op); }`});
+      vec3 col=mix(vec3(0.66,0.28,0.23),ic.rgb,ic.a); float a=max(ic.a,ring)*vF; if(a<0.02) discard; gl_FragColor=vec4(col,a*op); }`});
 const INC_TIPOS={obras:0,accidente:1,manifestacion:2,cortada:3,averia:4,otra:5};
 let INCS=[], incReady=false, beacons=null, avisos=null; const INC_OBS=new Map(), INC_CERRADA=new Set();
 const incLbl=[];
@@ -1732,7 +1735,7 @@ function incStep(now,dt,mpp){
   for(const k in R) setCount(R[k],R[k].n);
   { const hi=mpp<HI_MPP; for(const k in R){ for(const im of R[k].hi) im.visible=hi; for(const im of R[k].lo) im.visible=!hi; } }
   const dpr=K.renderer.getPixelRatio(); beaconMat.uniforms.time.value=t; beaconMat.uniforms.dpr.value=dpr; beacons.visible=cerca;
-  avisoMat.uniforms.time.value=t; avisoMat.uniforms.dpr.value=dpr; avisoMat.uniforms.op.value=Math.min(1,Math.max(0,(mpp-0.45)/0.5)); avisos.visible=mpp>0.45;
+  avisoMat.uniforms.time.value=t; avisoMat.uniforms.dpr.value=dpr; avisoMat.uniforms.tgt.value.set(cam.x,cam.z); avisos.visible=true;
   // rótulos (solo en la demostración): qué es cada una
   let used=0;
   if(INC_DEMO?mpp<1.5:mpp<0.6) for(const inc of INCS){ _p.set(inc.x,0,inc.z).project(K.cam); if(Math.abs(_p.x)>1||Math.abs(_p.y)>1) continue;
