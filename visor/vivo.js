@@ -939,7 +939,8 @@ function wxTarget(){
   const c=d.codigo||0, mm=d.precipitacion_mm||d.lluvia_mm||0;
   const isRain=(c>=51&&c<=67)||(c>=80&&c<=82)||c>=95, isSnow=(c>=71&&c<=77)||c===85||c===86, isFog=c===45||c===48;
   const elev=S.elev!==undefined?S.elev:sunElev(new Date());
-  return {cloud:isFog?1:Math.min(1,(d.nubes||0)/100),           // con niebla, cielo cubierto liso: el velo ya tapa las nubes (y el ruido es caro) rain:isRain?Math.min(1,(c<=57?0.3:0.5)+mm/8):0, snow:isSnow?Math.min(1,0.45+mm/4):0,
+  // con niebla, cielo cubierto liso: el velo ya tapa las nubes (y su ruido es caro)
+  return {cloud:isFog?1:Math.min(1,(d.nubes||0)/100), rain:isRain?Math.min(1,(c<=57?0.3:0.5)+mm/8):0, snow:isSnow?Math.min(1,0.45+mm/4):0,
     fog:isFog?1:0, storm:c>=95?1:0, dark:sstep(3,-9,elev), golden:sstep(-5,1,elev)*(1-sstep(4,16,elev)),
     lights:Math.max(sstep(-0.5,-6,elev),isFog?0.85:0,isSnow?0.75:0,c>=95?0.6:0,isRain?0.3*Math.min(1,(d.nubes||0)/100):0),
     sway:sstep(8,60,d.viento_kmh||0)*0.7, wind:d.viento_kmh||0, wdir:d.viento_dir||0, elev, desc:d.descripcion||WX&&WX.descripcion||''}; }
