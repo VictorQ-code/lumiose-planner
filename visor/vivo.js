@@ -247,7 +247,7 @@ function updateArea(){
   const stretch=1/Math.max(0.35,Math.cos(K.controls.getPolarAngle?K.controls.getPolarAngle():0.9));
   let r=Math.min(1600,Math.max(220,Math.max(hh*stretch,hw)*1.15));
   if(!candDirty&&!parkDirty&&area.r&&Math.hypot(t.x-area.x,t.z-area.z)<r*0.2&&Math.abs(r-area.r)<area.r*0.25) return false;
-  if(area.r&&Math.hypot(t.x-area.x,t.z-area.z)>area.r) firstFill=true;   // salto lejos: llenar de golpe
+  if(area.r&&Math.hypot(t.x-area.x,t.z-area.z)>area.r){ firstFill=true; saltoHasta=performance.now()+3000; }   // salto lejos: llenar de golpe
   candDirty=false;
   const {E,cells,CELL}=RED;
   const juntar=r=>{ cand=[]; for(let ix=Math.floor((t.x-r)/CELL);ix<=Math.floor((t.x+r)/CELL);ix++) for(let iz=Math.floor((t.z-r)/CELL);iz<=Math.floor((t.z+r)/CELL);iz++){
@@ -355,7 +355,9 @@ function aheadIn(G,x,z,ang,maxD,self){ const dx=Math.cos(ang), dz=-Math.sin(ang)
       if(Math.abs(-rx*dz+rz*dx)>1.7||Math.cos(o.ang-ang)<0.75) continue; bl=lon; best=o; } }
   return best?[bl,best]:null; }
 const A_CAR=1.6, A_BUS=1.0, B_DEC=2.2, S0=2.0, T_HW=1.2;
-function respawn(v){ if(v.remove){ v.dead=true; return; } if(!spawn(v,false)) v.dead=true; }
+// justo después de saltar lejos, los que venían de la zona anterior se recolocan también a la vista (con fundido)
+let saltoHasta=0;
+function respawn(v){ if(v.remove){ v.dead=true; return; } if(!spawn(v,performance.now()<saltoHasta)) v.dead=true; }
 function drive(v,dt){
   const E=RED.E; let e=E[v.e];
   v.age+=dt;
