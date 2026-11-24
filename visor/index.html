@@ -1725,6 +1725,8 @@ $('msg').textContent=T('Preparando el tráfico, los buses y los datos en vivo…
   while(!(window.CITY3D&&window.CITY3D.listo)&&performance.now()-t<15000) await sleep(50);              // vivo.js aún no ha llegado
   if(window.CITY3D&&window.CITY3D.listo) await Promise.race([window.CITY3D.listo,sleep(Math.max(0,15000-(performance.now()-t)))]);
   await sleep(400);                                                                                          // un respiro para el primer dibujo con todo
+  // «estoy aquí»: qué navegador y qué gráfica tiene cada equipo que lo abre (para entender fallos de un solo equipo)
+  informar('visita',{carga_s:+((performance.now()-T0)/1000).toFixed(1),movil:!!MOVIL,ligero:LIGERO,sinGpu:SIN_GPU,pixeles:renderer.getPixelRatio()});
   // ritmo real durante 10 s tras cargar: si va a tirones (menos de ~12 fotogramas por segundo), informe
   { let n=0, lentos=0, prev=performance.now(); const fin=prev+10000;
     const mide=t=>{ const d=t-prev; prev=t; n++; if(d>85) lentos++; if(t<fin) requestAnimationFrame(mide); else if(n>20&&lentos/n>0.5) informar('va a tirones',{fotogramas:n,lentos}); };
