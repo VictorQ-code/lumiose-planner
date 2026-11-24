@@ -14,6 +14,10 @@ on:
         description: "Modo prueba: escribe en prueba/historico/ y no borra nada"
         type: boolean
         default: true
+      hoy:
+        description: "Solo en modo prueba: fingir que hoy es esta fecha (AAAA-MM-DD), para compactar días aún abiertos"
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -41,9 +45,10 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           PYTHONIOENCODING: utf-8
+          HOY: ${{ inputs.hoy }}
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.prueba }}" = "true" ]; then
-            python pipeline/compactar_nube.py --prueba --resumen ""
+            python pipeline/compactar_nube.py --prueba --resumen "" ${HOY:+--hoy "$HOY"}
           else
             python pipeline/compactar_nube.py
           fi
