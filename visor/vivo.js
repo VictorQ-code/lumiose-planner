@@ -1545,15 +1545,15 @@ function incPoner(tipo,ei,texto){
   const pon=(k,u,lat,giro,col)=>{ const [x,z,a]=at(u,lat); inc.piezas.push([k,x,z,a+(giro||0),col]); };
   const luz=(u,lat,y,col,f,ph)=>{ const [x,z]=at(u,lat); inc.luces.push([x,y,z,col,f,ph]); };
   const AMB=[1,0.62,0.2], AZ=[0.3,0.5,1], RO=[1,0.25,0.2];
-  if(tipo==='obras'){ const lo=laneOff(outer), L=14, u0=mid-L/2;
+  if(tipo==='obras'){ const lo=laneOff(0), L=14, u0=mid-L/2;                  // carril central: de arriba no lo tapan los árboles de la acera
     for(let k=0;k<7;k++){ pon('valla',u0+1+k*2,lo-1.45,0); pon('valla',u0+1+k*2,lo+1.45,0); }
     pon('valla',u0,lo,Math.PI/2); pon('valla',u0+L,lo,Math.PI/2);
     for(let k=0;k<4;k++) pon('cono',u0-3-k*3,lo-(k*0.35),0);
     pon('arena',mid+2,lo+0.2,0.4);
     luz(u0,lo-1.45,1.15,AMB,1.2,0); luz(u0,lo+1.45,1.15,AMB,1.2,0.5); luz(u0+L,lo-1.45,1.15,AMB,1.2,0.25);
     inc.gente.push({u:mid-3,lat:lo-0.4,amp:2.5,f:0.13,ph:0,col:ORANGE},{u:mid+4,lat:lo+0.3,amp:1.2,f:0.21,ph:2,col:C.ochre});
-    bloquea(0,[outer],u0-4,u0+L+0.5); }
-  if(tipo==='accidente'){ const l0=laneOff(Math.max(0,outer-1)), l1=laneOff(outer);
+    bloquea(0,[0],u0-4,u0+L+0.5); }
+  if(tipo==='accidente'){ const l0=laneOff(0), l1=laneOff(Math.min(1,outer));
     inc.piezas.push(['coche',...at(mid+2.5,l1),C.blue]); inc.piezas[inc.piezas.length-1][3]+=0.35;
     inc.piezas.push(['utilitario',...at(mid-2.3,(l0+l1)/2),C.silver]); inc.piezas[inc.piezas.length-1][3]-=0.5;
     pon('urbana',mid-11,l1,0);
@@ -1562,7 +1562,7 @@ function incPoner(tipo,ei,texto){
     for(const [u,l] of [[mid+4.6,l1],[mid+0.4,l1],[mid-0.2,(l0+l1)/2],[mid-4.4,(l0+l1)/2]]){ luz(u,l-0.75,0.65,AMB,1.6,0); luz(u,l+0.75,0.65,AMB,1.6,0); }
     luz(mid-11,l1-0.35,1.62,AZ,3.2,0); luz(mid-11,l1+0.35,1.62,RO,3.2,0.5);
     inc.gente.push({u:mid-8,lat:l1+2.2,amp:0.6,f:0.1,ph:1,col:GU_BLUE},{u:mid+6,lat:l1+2.4,amp:0.3,f:0.05,ph:0,col:C.red});
-    bloquea(0,ln>1?[outer-1,outer]:[outer],mid-18,mid+5.5); }
+    bloquea(0,ln>1?[0,1]:[0],mid-18,mid+5.5); }
   if(tipo==='manifestacion'){ const W=e.one?ln*3.1:ln*3.1*2, L=26;
     inc.marcha={u0:mid-L/2-20,len:40,v:0.55};
     for(let k=0;k<70;k++) inc.gente.push({mar:true,du:Math.random()*L,lat:(Math.random()-0.5)*(W-2),col:ROPA[k%ROPA.length],ph:Math.random()*6});
