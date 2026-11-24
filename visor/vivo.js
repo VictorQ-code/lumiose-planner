@@ -974,7 +974,7 @@ const wxMul=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthW
       m*=mix(vec3(1.),vec3(1.,0.84,0.66),golden*0.5);
       float fl=0.;                                                            // monumentos con focos: su fachada y su entorno no se apagan
       #ifdef W_FOCOS
-      { vec2 w=ground(); for(int i=0;i<32;i++){ vec4 l=lmL[i]; if(l.z<=0.) break; fl=max(fl,smoothstep(l.z,l.z*0.45,distance(w,l.xy))); } fl*=lit; }
+      { vec2 w=ground(); for(int i=0;i<W_FOCOS;i++){ vec4 l=lmL[i]; fl=max(fl,smoothstep(l.z,l.z*0.45,distance(w,l.xy))); } fl*=lit; }   // solo los monumentos en pantalla
       #endif
       m*=mix(vec3(1.),vec3(0.60,0.64,0.80),dark*0.85*(1.-fl*0.9));
       m*=mix(vec3(1.),vec3(1.,0.93,0.80),fl*dark*0.6);
@@ -1029,10 +1029,10 @@ const lampMat=new THREE.ShaderMaterial({ transparent:true, depthWrite:false, ble
       vA=smoothstep(aRnd*0.75,aRnd*0.75+0.12,L);                                // cada farola se enciende a su momento
       if(aR<12.&&aRnd>0.4+night) vA=0.;                                        // de día (niebla, nieve) basta con una parte
       float px=2.*aR*(1.+fog*0.5)/mpp; vK=clamp(px/10.,0.,1.); vC=aC;
-      gl_PointSize=vA>0.001?clamp(px,2.2,aR>12.?150.:30.)*dpr:0.; }        // farolas: como mucho 44 px; focos de monumentos, más`,
+      gl_PointSize=vA>0.001?clamp(px*0.8,2.2,aR>12.?120.:24.)*dpr:0.; }    // al 80 %: el borde del halo casi no se veía y era un tercio del relleno`,
   fragmentShader:`uniform float fog,night; varying float vA; varying float vK; varying vec3 vC;
-    void main(){ float d=length(gl_PointCoord-0.5)*2.; if(d>1.) discard;
-      float glow=exp(-d*d*(3.2-fog*1.4))*(0.62+0.25*fog), core=smoothstep(0.13,0.02,d)*vK;
+    void main(){ float d0=length(gl_PointCoord-0.5)*2.; if(d0>1.) discard; float d=d0*0.8;   // d: distancia en el tamaño de antes
+      float glow=exp(-d*d*(3.2-fog*1.4))*(0.62+0.25*fog)*(1.-smoothstep(0.7,1.,d0)), core=smoothstep(0.13,0.02,d)*vK;
       gl_FragColor=vec4(vC*(glow*(0.35+0.65*vK)+core)*vA*(0.22+0.78*night),1.); }`});   // de día (niebla, nieve) se notan poco
 let lamps=null, nLamps=0, nLmLights=0;
 function buildLamps(){
@@ -1060,7 +1060,7 @@ const wxQuad=new THREE.PlaneGeometry(2,2);
 const wxM1=new THREE.Mesh(wxQuad,wxMul), wxM2=new THREE.Mesh(wxQuad,wxMix);
 wxM1.frustumCulled=wxM2.frustumCulled=false; wxM1.renderOrder=990; wxM2.renderOrder=991; wxM1.visible=wxM2.visible=false; root.add(wxM1,wxM2);
 const _wa=new THREE.Vector3(), _wb=new THREE.Vector3();
-function setDefs(mat,want){ const d={}; let key=''; for(const k in want) if(want[k]){ d[k]=''; key+=k+','; }
+function setDefs(mat,want){ const d={}; let key=''; for(const k in want) if(want[k]){ d[k]=want[k]===true?'':String(want[k]); key+=k+'='+d[k]+','; }
   if(mat.userData.defKey!==key){ mat.userData.defKey=key; mat.defines=d; mat.needsUpdate=true; } }
 function wxStep(now,dt,mpp){
   if(!ON.tiempo){ wxM1.visible=wxM2.visible=false; if(lamps) lamps.visible=false; if(K.U.wind) K.U.wind.value.z=0; return false; }
@@ -1085,10 +1085,17 @@ function wxStep(now,dt,mpp){
   wxM2.visible=WXV.fog>0.01||WXV.snow>0.01||WXV.rain>0.01||flashV>0;
   if(K.U.wind){ K.U.wind.value.set(wx,wz,WXV.sway,time); }
   if(WXV.lights>0.005){ if(!lamps&&RED) buildLamps(); else if(!RED&&redState==='none') loadRed(); }
-  if(!wxStep.lm&&K.LMS){ wxStep.lm=1; K.LMS.slice(0,32).forEach((l,i)=>{ const a=l.axis||{}; u.lmL.value[i].set(l.x,l.z,Math.max(25,(Math.max(a.len||0,a.wid||0))*0.6+(l.spire_h||l.body_h||20)*0.9),1); }); }
+  if(!wxStep.lm&&K.LMS){ wxStep.lm=K.LMS.map(l=>{ const a=l.axis||{}; return [l.x,l.z,Math.max(25,(Math.max(a.len||0,a.wid||0))*0.6+(l.spire_h||l.body_h||20)*0.9)]; }); }
   u.lit.value=WXV.lights;
+  // focos de monumentos: al shader solo van los que tocan la pantalla (antes repasaba los 32 en cada píxel)
+  let nFocos=0;
+  if(WXV.lights>0.01&&WXV.dark>0.01&&wxStep.lm){
+    const cam=K.cam, hh=(cam.top-cam.bottom)/cam.zoom/2, hw=(cam.right-cam.left)/cam.zoom/2, Rv=Math.max(hw,hh/Math.max(0.35,Math.cos(K.controls.getPolarAngle())))*1.2;
+    for(const [x,z,r] of wxStep.lm){ if(nFocos>=32) break; if(Math.hypot(x-t.x,z-t.z)<Rv+r) u.lmL.value[nFocos++].set(x,z,r,1); } }
+  const nF=nFocos?[1,2,4,8,16,32].find(n=>n>=nFocos):0;
+  for(let i=nFocos;i<nF;i++) u.lmL.value[i].set(0,0,0.001,0);      // huecos: radio casi nulo, no iluminan
   // versión del shader con solo lo necesario (cada combinación se compila una vez y se reutiliza)
-  setDefs(wxMul,{W_NUBES:WXV.cloud>0.01&&WXV.cloud<=0.96, W_FOCOS:WXV.lights>0.01&&WXV.dark>0.01});
+  setDefs(wxMul,{W_NUBES:WXV.cloud>0.01&&WXV.cloud<=0.96, W_FOCOS:nF});
   setDefs(wxMix,{W_NIEBLA:WXV.fog>0.01, W_NIEVE:WXV.snow>0.01, W_LLUVIA:WXV.rain>0.01});
   if(lamps){ lamps.visible=WXV.lights>0.005; lampMat.uniforms.L.value=WXV.lights; lampMat.uniforms.fog.value=Math.max(WXV.fog,WXV.snow*0.5); lampMat.uniforms.night.value=Math.max(WXV.dark,WXV.storm*0.4); }
   // repintado: lluvia, nieve y relámpagos a 60 fps; nubes y árboles mecidos, a 12–30 fps (el resto del tiempo el visor descansa)
