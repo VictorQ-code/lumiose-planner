@@ -6,3 +6,4 @@ pandas>=2.0
 pyarrow>=14
 requests>=2.31
 matplotlib>=3.8
+boto3>=1.34
