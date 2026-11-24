@@ -1,4 +1,11 @@
-# city3d · pipeline del barrio de prueba
+# Lumiose Planner · Barcelona en 3D
+
+**Web:** https://lumiose.victorquero.dev · **En el portfolio:** https://victorquero.dev/proyectos/lumiose-planner/
+
+Gemelo digital de Barcelona en el navegador, con tráfico, Bicing, buses, metro y tiempo en vivo, en español e inglés.
+Cada subida a `main` se publica sola en Cloudflare Workers (ver `wrangler.jsonc` y `.assetsignore`).
+
+## city3d · pipeline del barrio de prueba
 
 Primer tramo del gemelo digital de Barcelona: edificios (con sótanos) y metro de un barrio,
 listos para el visor 3D en estilo tinta sepia.
