@@ -1758,7 +1758,9 @@ const enviados=new Set();
 // Diagnóstico sin error: si a pie de calle hay calles cargadas pero ningún coche (o la escena de una incidencia a la vista
 // no se dibuja) durante unos segundos, se envía una foto del estado al Worker (una vez por visita)
 const DIAG={nanCoches:0,nanBicis:0,nanGente:0,sinCoches:0,sinEscena:0};
+let DT_MEDIO=1/60;
 function vigilar(now,dt,mpp){
+  if(dt>0&&dt<1) DT_MEDIO=DT_MEDIO*0.98+dt*0.02;                                  // fotogramas por segundo reales (144 Hz, etc.)
   const sinCoches=ON.vehiculos&&RED&&mpp<VEH_MPP*0.8&&candTot>20&&nCars===0;
   DIAG.sinCoches=sinCoches?DIAG.sinCoches+dt:0;
   let escena=false; const t=K.controls.target;
@@ -1778,6 +1780,7 @@ function fallo(donde,e,soloInforme){
   if(!simErr&&!soloInforme){ simErr=donde+': '+msg.slice(0,280); console.error('vivo:',donde,e); panel(); }
   if(enviados.has(donde)) return; enviados.add(donde);
   try{ const cuerpo=JSON.stringify({donde,msg,ua:navigator.userAgent,mpp:K.mppNow&&+K.mppNow().toFixed(3),embed:!!window.EMBED,
+      pantalla:[innerWidth,innerHeight,devicePixelRatio,screen.width,screen.height],fps:+(1/Math.max(1e-3,DT_MEDIO)).toFixed(0),
       gl:(()=>{ try{ const g=K.renderer.getContext(), x=g.getExtension('WEBGL_debug_renderer_info'); return x?g.getParameter(x.UNMASKED_RENDERER_WEBGL):''; }catch(_){ return ''; } })(),ts:new Date().toISOString()});
     if(navigator.sendBeacon) navigator.sendBeacon('/api/error',new Blob([cuerpo],{type:'application/json'})); else fetch('/api/error',{method:'POST',body:cuerpo,keepalive:true}); }catch(_){} }
 function capa(donde,f){ try{ f(); }catch(e){ fallo(donde,e); } }
