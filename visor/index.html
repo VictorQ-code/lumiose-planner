@@ -1086,15 +1086,15 @@ function camGuard(){
 }
 // Vuelo suave hasta un punto (doble clic, minimapa)
 let fly=null;
-function flyTo(point,zoom){
-  fly={t:0,from:controls.target.clone(),to:new THREE.Vector3(point.x,0,point.z),z0:cam.zoom,z1:zoom??cam.zoom};
+function flyTo(point,zoom,dur=0.7){
+  fly={t:0,dur,from:controls.target.clone(),to:new THREE.Vector3(point.x,0,point.z),z0:cam.zoom,z1:zoom??cam.zoom};
 }
 function flyStep(dt){
   if(!fly) return;
-  fly.t=Math.min(1,fly.t+dt/0.7); const e=fly.t<.5?4*fly.t**3:1-Math.pow(-2*fly.t+2,3)/2;
+  fly.t=Math.min(1,fly.t+dt/fly.dur); const e=fly.t<.5?4*fly.t**3:1-Math.pow(-2*fly.t+2,3)/2;
   const off=cam.position.clone().sub(controls.target);
   controls.target.lerpVectors(fly.from,fly.to,e); cam.position.copy(controls.target).add(off);
-  cam.zoom=fly.z0+(fly.z1-fly.z0)*e; cam.updateProjectionMatrix(); lastMove=performance.now(); dirty=true;
+  cam.zoom=fly.z0*Math.pow(fly.z1/fly.z0,e); cam.updateProjectionMatrix();       // zoom en proporción: se acerca a ritmo constante lastMove=performance.now(); dirty=true;
   if(fly.t>=1) fly=null;
 }
 function goThere(x,y){
@@ -1668,6 +1668,7 @@ $('bBench').onclick=()=>{
 
 paso('primer dibujo');
 const LOAD_MS=performance.now()-T0;
+const INTRO=CITY&&!/[?&]intro=0/.test(location.search)?{x:1468,z:1135}:null;        // Passeig de Gràcia con Gran Via (?intro=0 lo quita)
 // La pantalla de carga sigue hasta que vivo.js tenga calles, horarios, red ciclista, aceras y los primeros datos en vivo
 // (K.listo), con un tope de 15 s por si alguna fuente externa tarda. Mientras está puesta, el mapa no recibe ni rueda ni dedos.
 $('bar').firstElementChild.style.width='100%';
@@ -1679,10 +1680,18 @@ $('msg').textContent=T('Preparando el tráfico, los buses y los datos en vivo…
   if(window.CITY3D&&window.CITY3D.listo) await Promise.race([window.CITY3D.listo,sleep(Math.max(0,15000-(performance.now()-t)))]);
   await sleep(400);                                                                                          // un respiro para el primer dibujo con todo
   dirty=true; window.__visorListo=true; $('load').style.opacity=0; setTimeout(()=>$('load').style.display='none',500);
+  // Entrada: un momento la ciudad entera y luego vuelo a pie de calle (Passeig de Gràcia con Gran Via), donde ya se ven
+  // coches, buses, bicis y gente. Así nadie ve una ciudad quieta al llegar. Si la persona toca el mapa antes, manda ella.
+  if(INTRO){
+    let tocado=false; const parar=()=>{ tocado=true; if(fly&&fly.intro) fly=null; };
+    for(const ev of ['pointerdown','wheel','keydown']) window.addEventListener(ev,parar,{once:true,capture:true});
+    await sleep(900);
+    if(!tocado&&!bench){ flyTo(INTRO,cam.zoom*mppNow()/0.3,3.2); fly.intro=true; }
+  }
 })();
 /* ================= Capa en vivo (visor/vivo.js): tráfico, vehículos, Bicing, tiempo… ================= */
 window.CITY3D={THREE,scene,cam,controls,renderer,U,LMS,LDIR,INK,BASE,CITY,mppNow,frameHooks:[],metro,metroGroup,trainSets,dirty:()=>{ dirty=true; },get mode(){ return mode; },
-  movil:MOVIL, renderLegend, LIVE_BTN:$('bLive'), origin:index.origin};
+  movil:MOVIL, renderLegend, LIVE_BTN:$('bLive'), origin:index.origin, intro:INTRO};
 { const s=document.createElement('script'); s.src='vivo.js?v='+Date.now(); s.onerror=()=>console.warn('vivo.js no disponible'); document.body.appendChild(s); }
 tick();
 })();

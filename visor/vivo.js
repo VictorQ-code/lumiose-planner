@@ -621,8 +621,11 @@ function queueBikeEvents(d){
 // (cogidas en el último minuto × ~12 min de viaje medio), en estaciones cercanas y en un punto al azar de su trayecto.
 function warmStart(){
   const T=BIKE.totales||{}, st=BIKE.estaciones, now=performance.now();
-  const c0=K.controls.target, cerca=st.filter(e=>Math.hypot(e[1]-c0.x,e[2]-c0.z)<3200);
-  const n=Math.min(180,Math.round((T.cogidas||0)*12*cerca.length/Math.max(1,st.length)));
+  // Al abrir solo hay una lectura de Bicing (sin cogidas que comparar): se usa el ritmo típico de Barcelona,
+  // ~55 bicis cogidas por minuto en hora punta, según la hora. Alrededor del punto al que vuela la entrada, si lo hay.
+  const c0=K.intro||K.controls.target, R=K.intro?1500:3200, cerca=st.filter(e=>Math.hypot(e[1]-c0.x,e[2]-c0.z)<R);
+  const cogidas=T.cogidas||Math.round(55*PHOUR[Math.floor(horaBcn())%24]);
+  const n=Math.min(180,Math.round(cogidas*12*cerca.length/Math.max(1,st.length)));
   for(let i=0;i<n;i++){ const e=cerca[(Math.random()*cerca.length)|0]; if(e) cycQueue.push({at:now,sale:true,warm:true,ele:Math.random()<(T.electricas||1)/((T.mecanicas||1)+(T.electricas||1)),x:e[1],z:e[2]}); }
 }
 function otherStation(x,z,dmin,dmax){ const st=BIKE.estaciones;

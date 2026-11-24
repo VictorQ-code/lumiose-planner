@@ -22,9 +22,11 @@ function partes(d) {
   return o;
 }
 async function gzip(txt) { return new Response(new Blob([txt]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer(); }
+// Carpeta por día de Barcelona; el nombre lleva la hora UTC (terminada en Z) para que el cambio de hora de octubre,
+// que repite de 2:00 a 3:00, no pise capturas. El compactador nocturno usa la hora exacta de los metadatos (ts).
 async function guardar(env, fuente, d, txt) {
-  const p = partes(d);
-  await env.DATOS.put(`bronze/${fuente}/fecha=${p.year}-${p.month}-${p.day}/${p.hour}${p.minute}${p.second}.json.gz`, await gzip(txt),
+  const p = partes(d), u = d.toISOString();
+  await env.DATOS.put(`bronze/${fuente}/fecha=${p.year}-${p.month}-${p.day}/${u.slice(11, 13)}${u.slice(14, 16)}${u.slice(17, 19)}Z.json.gz`, await gzip(txt),
     { httpMetadata: { contentType: 'application/json' }, customMetadata: { ts: d.toISOString() } });
 }
 // Los errores nunca llevan la dirección completa: la de iBus contiene las claves
