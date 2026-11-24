@@ -1427,8 +1427,10 @@ function panel(){
   let tr='', bk='', vh='';
   if(caps.trafico&&caps.trafico.estado==='error') tr='error: '+caps.trafico.error;
   else if(TRAF){ let d=0,t=0; for(const s of TRAF.values()){ if(s>0) t++; if(s>=3&&s<=5) d++; } tr=TX(`${t} tramos con datos · ${d} densos o atascados`,`${t} road sections with data · ${d} heavy or jammed`); }
-  if(INC_N&&!INC_DEMO) tr+=(tr?'<br>':'')+TX(`${INC_N} incidencias del Ayuntamiento · ${INCS.length} en el mapa`,`${INC_N} city traffic incidents · ${INCS.length} on the map`)
-    +(INC_SIN.length?TX(` (${INC_SIN.length} sin sitio exacto)`,` (${INC_SIN.length} without an exact place)`):'');
+  if(!INC_DEMO) tr+=(tr?'<br>':'')+(incEstado==='ok'
+    ?TX(`${INC_N} incidencias del Ayuntamiento · ${INCS.length} en el mapa`,`${INC_N} city traffic incidents · ${INCS.length} on the map`)
+      +(INC_SIN.length?TX(` (${INC_SIN.length} sin sitio exacto)`,` (${INC_SIN.length} without an exact place)`):'')
+    :TX('incidencias: ','incidents: ')+incEstado);
   if(BIKE){ const T=BIKE.totales||{}; bk=TX(`${NUM(T.mecanicas||0)} mecánicas · ${NUM(T.electricas||0)} eléctricas · ${T.estaciones||0} estaciones`,`${NUM(T.mecanicas||0)} mechanical · ${NUM(T.electricas||0)} electric · ${T.estaciones||0} stations`)
     +(T.cogidas||T.dejadas?TX(`<br>último minuto: ${T.cogidas||0} cogidas, ${T.dejadas||0} dejadas`,`<br>last minute: ${T.cogidas||0} taken, ${T.dejadas||0} returned`):'')
     +(bkState==='missing'&&LOADERR.bici==='404'?TX('<br>falta la red ciclista: ejecuta <b>python pipeline\\red_viaria.py</b>','<br>cycle network missing'):BK?TX(`<br>${nCyc} ciclistas cerca (salidas y llegadas reales, trayecto estimado)`,`<br>${nCyc} cyclists nearby (real departures and arrivals, estimated route)`):''); }
@@ -1689,12 +1691,17 @@ function incReales(frases){
   }
   incBuildGPU(); K.dirty(); panel();
 }
+// estado visible en el panel «En vivo» (para saber qué pasa en un equipo donde no salen)
+let incEstado='pendiente';
 async function loadIncidencias(){
-  try{ const r=await fetch('/api/incidencias',{cache:'no-store'}); if(!r.ok) return; const d=await r.json(), fr=d.frases||[];
-    if(JSON.stringify(fr)===JSON.stringify(incFrases)) return;
-    if(callState==='none') await loadCallejero(); if(!CALL) return;
-    incFrases=fr; incReales(fr); }
-  catch(e){ console.warn('vivo: incidencias',e); } }
+  try{ incEstado=incEstado==='pendiente'?'pidiendo avisos':incEstado;
+    const r=await fetch('/api/incidencias',{cache:'no-store'}); if(!r.ok){ incEstado='el servidor respondió '+r.status; panel(); return; }
+    const d=await r.json(), fr=d.frases||[];
+    if(JSON.stringify(fr)===JSON.stringify(incFrases)){ return; }
+    if(callState==='none'||callState==='missing'){ incEstado='cargando el callejero'; await loadCallejero(); }
+    if(!CALL){ incEstado='no se pudo cargar el callejero ('+(LOADERR.callejero||'?')+')'; incLast=performance.now()-110000; panel(); return; }   // se reintenta en 10 s
+    incReales(fr); incFrases=fr; incEstado='ok'; panel(); }
+  catch(e){ incEstado='error: '+String(e&&e.message||e).slice(0,80); console.warn('vivo: incidencias',e); panel(); } }
 const _ic=new THREE.Color();
 // ¿cae (calle, sentido, carril, posición) dentro de una incidencia? (para no hacer aparecer coches ahí)
 function incDentro(ei,dir,lane,s){ const l=INC_OBS.get(ei); if(!l) return false; const e=RED.E[ei], u=dir?e.len-s:s;
