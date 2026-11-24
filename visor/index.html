@@ -258,6 +258,9 @@ const cam=new THREE.OrthographicCamera(-H,H,H,-H,1,40000);
 const DIR=new THREE.Vector3(1,0.85,1).normalize(), CAMDIST=15000;
 const controls=new (THREE.MapControls||THREE.OrbitControls)(cam,canvas);   // como un mapa: izquierdo mueve, derecho gira
 controls.screenSpacePanning=false;
+// Táctil, como Google Maps: un dedo mueve; dos dedos pellizcan (zoom) y arrastran (mover). Antes, con dos dedos el
+// pellizco también giraba e inclinaba el mapa con cualquier deriva de los dedos: el giro va aparte (más abajo, «giro táctil»)
+if(THREE.TOUCH) controls.touches={ONE:THREE.TOUCH.PAN,TWO:THREE.TOUCH.DOLLY_PAN};
 controls.enableDamping=true; controls.dampingFactor=0.12;
 controls.minZoom=0.02; controls.maxZoom=30; controls.maxPolarAngle=1.42; controls.autoRotateSpeed=0.5;
 const L_MAIN=0, L_PICK=2;
@@ -1048,6 +1051,20 @@ const endTouch=e=>{ if(e.pointerType==='mouse') return; touchPts.delete(e.pointe
   pickAsync(e.clientX,e.clientY,id=>{ const html=tipHTML(id); SEL.value=html?id:-1; dirty=true; showTip(e,html); });
 };
 canvas.addEventListener('pointerup',endTouch,true); canvas.addEventListener('pointercancel',endTouch,true);
+
+/* Giro táctil: girar los dos dedos rota el mapa alrededor del centro. Empieza solo si se giran más de ~12° (así un
+   pellizco para hacer zoom no gira sin querer) y luego sigue a los dedos 1:1. */
+{ let ang=null, acum=0, girando=false; const Y=new THREE.Vector3(0,1,0), off=new THREE.Vector3();
+  const angulo=t=>Math.atan2(t[1].clientY-t[0].clientY,t[1].clientX-t[0].clientX);
+  canvas.addEventListener('touchstart',e=>{ if(e.touches.length===2){ ang=angulo(e.touches); acum=0; girando=false; } else ang=null; },{passive:true});
+  canvas.addEventListener('touchmove',e=>{
+    if(e.touches.length!==2||ang===null) return;
+    const a=angulo(e.touches); let d=a-ang; d=Math.atan2(Math.sin(d),Math.cos(d)); ang=a; acum+=d;
+    if(!girando&&Math.abs(acum)>0.21){ girando=true; d=acum; }                        // ~12°: a partir de aquí, gira
+    if(!girando||!d) return;
+    off.copy(cam.position).sub(controls.target).applyAxisAngle(Y,d); cam.position.copy(controls.target).add(off); cam.lookAt(controls.target);
+    controls.update(); lastMove=performance.now(); dirty=true; },{passive:true});
+  canvas.addEventListener('touchend',e=>{ if(e.touches.length<2) ang=null; },{passive:true}); }
 
 /* Zoom suave hacia el cursor */
 let zoomGoal=null; const zoomNdc=new THREE.Vector2();
