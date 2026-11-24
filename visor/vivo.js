@@ -854,7 +854,8 @@ function sideDist(i,s){ const k=2*i+(s>0?0:1); let v=PN.off[k]; if(v===v) return
     let t=0; while(t<=30&&isRoad(x+nx*t,z+nz*t)) t+=0.5; if(t<=30) _sd.push(t); }
   _sd.sort((a,b)=>a-b); v=_sd.length>=2?_sd[_sd.length>>1]:NO_ACERA;
   if(v<NO_ACERA&&TRAM){ let enVia=0;                                            // esa «acera» cae en la plataforma del tranvía: no se camina por ahí
-    for(const f of [0.25,0.5,0.75]){ edgePt(e,e.len*f,s*(v+ACERA+0.5),PQ); if(tramCerca(PQ[0],PQ[1],0.8)) enVia++; }
+    // 5 puntos: si 2 o más caen en la vía, la acera va a lo largo de ella (una calle que solo la cruza toca 1 como mucho)
+    for(const f of [0.1,0.3,0.5,0.7,0.9]){ edgePt(e,e.len*f,s*(v+ACERA+0.5),PQ); if(tramCerca(PQ[0],PQ[1],0.9)) enVia++; }
     if(enVia>=2) v=NO_ACERA; }
   PN.off[k]=v; return v; }
 const latOf=(i,s,p)=>s*(sideDist(i,s)+ACERA+p.j);
