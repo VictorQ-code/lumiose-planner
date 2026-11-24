@@ -228,6 +228,68 @@ def bus(ts, txt):
         yield from walk(j)
 
 
+# --- Incidencias del Ayuntamiento: una frase en catalán por incidencia («C. Muntaner a l´altura de … tallat al trànsit per
+#     obres.»). Se clasifica por la causa y el efecto que dice el propio texto; el texto original se guarda siempre.
+_CAUSAS = [("accidente", r"accident|xoc|col·lisi|col\.lisi|atropell"), ("averia", r"avaria|avariat"),
+           ("obras", r"obres|obra\b|asfaltat|pavimentaci"), ("manifestacion", r"manifestaci|concentraci|protesta|vaga"),
+           ("evento", r"esdeveniment|cursa|marat|festa|concert|partit|cavalcada|desfilada|acte\b|fira|rodatge|filmaci"),
+           ("emergencia", r"incendi|emergència|inundaci|despreniment|fuita|bombers"),
+           ("meteo", r"pluja|neu|vent|gel\b|temporal"), ("mudanza", r"mudança|grua|contenidor")]
+_EFECTOS = [("cortado", r"tallat|tallada|tall\b|tancat|tancada"), ("retenciones", r"retenci|congesti"),
+            ("restricciones", r"restricci|afectaci|desviament|desviat|carril")]
+
+
+def _clase(txt: str, tabla, nada="otra") -> str:
+    t = txt.lower()
+    for nombre, patron in tabla:
+        if re.search(patron, t):
+            return nombre
+    return nada
+
+
+def incidencias_bcn(ts, txt):
+    linea = next((l for l in txt.splitlines() if l.strip()), "")
+    for frase in re.split(r"\s{3,}", linea):
+        frase = frase.strip()
+        if len(frase) < 4:
+            continue
+        tramo = re.match(r"^(.+)\s+de\s+((?:(?!\s+de\s).)+?)\s+fins\s+a\s+", frase)      # «Pg. de Gràcia de Av. Diagonal fins a …»
+        via = tramo.group(1).strip() if tramo else re.split(
+            r"\s+sentit\s+|\s+a\s+l[´'’]altura|,|\s+tallat|\s+tallada|\s+restricc", frase, maxsplit=1)[0].strip()
+        m = re.search(r"sentit\s+(.+?)(?:\s+a\s+l[´'’]altura|,|$)", frase)
+        yield {"ts": ts, "texto": frase, "causa": _clase(frase, _CAUSAS, "sin_indicar"), "efecto": _clase(frase, _EFECTOS),
+               "via": via, "sentido": m.group(1).strip() if m else None}
+
+
+# --- Incidencias del Servei Català de Trànsit (DATEX II 1.0): toda Cataluña; se marca si toca Barcelona y alrededores
+def incidencias_sct(ts, txt):
+    import xml.etree.ElementTree as ET
+    xsi = "{http://www.w3.org/2001/XMLSchema-instance}type"
+    loc = lambda e: e.tag.rsplit("}", 1)[-1]  # noqa: E731
+    sub_campos = ("roadMaintenanceType", "accidentType", "vehicleObstructionType", "obstructionType", "networkManagementType",
+                  "abnormalTrafficType", "poorEnvironmentType", "environmentalObstructionType", "publicEventType",
+                  "nonWeatherRelatedRoadConditionType", "weatherRelatedRoadConditionType", "roadOrCarriagewayOrLaneManagementType",
+                  "disturbanceActivityType", "constructionWorkType", "trafficTrendType")
+    for rec in ET.fromstring(txt.encode("utf-8")).iter():
+        if loc(rec) != "situationRecord":
+            continue
+        campos = {}
+        for e in rec.iter():
+            if e is not rec and e.text and e.text.strip():
+                campos.setdefault(loc(e), e.text.strip())
+        sub = next((f"{k}={campos[k]}" for k in sub_campos if k in campos), None)
+        lats = [float(e.text) for e in rec.iter() if loc(e) == "latitude"]
+        lons = [float(e.text) for e in rec.iter() if loc(e) == "longitude"]
+        ciudad = [e.text.strip() for e in rec.iter() if loc(e) == "value" and e.text and e.text.strip()]
+        yield {"ts": ts, "id": rec.get("id"), "version": _ent(campos.get("situationRecordVersion")),
+               "tipo": (rec.get(xsi) or "?").split(":")[-1], "subtipo": sub, "carretera": campos.get("roadNumber"),
+               "lugar": next((c for c in ciudad if c.isupper() and not re.match(r"^[A-Z]{1,3}-\d", c)), None),
+               "sentido": campos.get("tpegDirection"), "estado": campos.get("validityStatus"),
+               "desde": campos.get("overallStartTime"), "hasta": campos.get("overallEndTime"),
+               "lat": lats[0] if lats else None, "lon": lons[0] if lons else None,
+               "bcn": any(41.30 < la < 41.50 and 2.02 < lo < 2.28 for la, lo in zip(lats, lons))}
+
+
 FUENTES = {
     "bicing": (bicing, ["id", "ts"], pa.schema([("ts", TS), ("id", pa.string()), ("mecanicas", pa.int16()),
                ("electricas", pa.int16()), ("anclajes_libres", pa.int16()), ("activa", pa.bool_()), ("ultimo_reporte", TS)])),
@@ -242,6 +304,12 @@ FUENTES = {
     "bus": (bus, ["parada", "linea", "ts", "orden"], pa.schema([("ts", TS), ("parada", pa.string()), ("linea", pa.string()),
             ("codi_linia", pa.string()), ("sentido", pa.int16()), ("trayecto", pa.string()), ("destino", pa.string()),
             ("id_bus", pa.int32()), ("orden", pa.int8()), ("llegada", TS)])),
+    "incidencias_bcn": (incidencias_bcn, ["ts", "texto"], pa.schema([("ts", TS), ("texto", pa.string()), ("causa", pa.string()),
+                        ("efecto", pa.string()), ("via", pa.string()), ("sentido", pa.string())])),
+    "incidencias_sct": (incidencias_sct, ["id", "ts"], pa.schema([("ts", TS), ("id", pa.string()), ("version", pa.int16()),
+                        ("tipo", pa.string()), ("subtipo", pa.string()), ("carretera", pa.string()), ("lugar", pa.string()),
+                        ("sentido", pa.string()), ("estado", pa.string()), ("desde", pa.string()), ("hasta", pa.string()),
+                        ("lat", pa.float32()), ("lon", pa.float32()), ("bcn", pa.bool_())])),
 }
 
 

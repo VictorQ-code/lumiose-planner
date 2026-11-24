@@ -1,7 +1,8 @@
 /* Lumiose Planner · Worker de Cloudflare
    - Sirve la web (los archivos estáticos los entrega Cloudflare solo; este código solo atiende /api/*).
    - Cada minuto captura los datos en vivo y los guarda tal cual en R2 (capa bronze), para ir acumulando el histórico:
-       Bicing cada minuto · tráfico cada 5 min · tiempo cada 15 min · iBus de TMB cada 2 min (25 paradas de control por turno).
+       Bicing cada minuto · tráfico cada 5 min · tiempo cada 15 min · iBus de TMB cada 2 min (25 paradas de control por turno)
+       · incidencias de tráfico (Ayuntamiento y Servei Català de Trànsit) cada 5 min.
    - /api/ibus devuelve las previsiones de iBus de los últimos 20 minutos; el visor calcula con ellas el retraso de cada
      línea frente al horario. Las claves de TMB son secretos del Worker: nunca salen de aquí ni se guardan en R2.
    El plan gratuito da 10 ms de procesador por ejecución: aquí solo se descarga y se guarda; lo pesado (compactar por días)
@@ -12,6 +13,10 @@ const BICING_GBFS = 'https://api.citybik.es/gbfs/2/bicing/gbfs.json';
 const TRAFICO = 'https://opendata-ajuntament.barcelona.cat/data/dataset/8319c2b1-4c21-4962-9acd-6db4c5ff1148/resource/2d456eb5-4ea6-4f68-9794-2f3f1a58a933/download';
 const TIEMPO = 'https://api.open-meteo.com/v1/forecast?latitude=41.3874&longitude=2.1686&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,rain,weather_code,cloud_cover,wind_speed_10m,wind_direction_10m,is_day&timezone=Europe%2FMadrid';
 const IBUS = 'https://api.tmb.cat/v1/itransit/bus/parades/';
+// Incidencias de tráfico: avisos del Ayuntamiento en las calles (texto, cada 5 min) y del Servei Català de Trànsit en
+// carreteras, Rondas y accesos (DATEX II, cada 5 min, ~1 MB)
+const INC_BCN = 'https://opendata-ajuntament.barcelona.cat/data/dataset/425f3411-963d-4ccc-a8de-c9422d923378/resource/2f308e87-8bb1-4145-97f2-3dcce62623b9/download';
+const INC_SCT = 'https://nap.dgt.es/datex2/sct/SituationPublication/all/content.xml';
 const POR_CICLO = 25, VENTANA_S = 20 * 60;
 
 // Fecha y hora de Barcelona (las particiones van por día local, como en pipeline/vivo.py)
@@ -51,6 +56,21 @@ async function pedirConReintentos(url, n = 3) {
   }
 }
 async function trafico(env, d) { await guardar(env, 'trafico', d, await pedirConReintentos(TRAFICO)); }
+async function incidencias(env, d) { await guardar(env, 'incidencias_bcn', d, await pedirConReintentos(INC_BCN)); }
+// El XML del SCT pesa ~1 MB: comprimirlo aquí se comería los 10 ms de procesador del plan gratuito, así que se guarda
+// tal cual (se copia sin leerlo) y lo comprime el compactador nocturno junto con el resto del día
+async function incidenciasSct(env, d) {
+  let r;
+  for (let i = 1; ; i++) {
+    r = await fetch(INC_SCT, { headers: { 'user-agent': 'lumiose-planner (portfolio, victorquero.dev)' } });
+    if (r.ok) break;
+    if (i >= 3) throw new Error(`${INC_SCT} respondió ${r.status}`);
+    await new Promise(res => setTimeout(res, 1500 * i));
+  }
+  const p = partes(d), u = d.toISOString();
+  await env.DATOS.put(`bronze/incidencias_sct/fecha=${p.year}-${p.month}-${p.day}/${u.slice(11, 13)}${u.slice(14, 16)}${u.slice(17, 19)}Z.xml`,
+    await r.arrayBuffer(), { httpMetadata: { contentType: 'text/xml' }, customMetadata: { ts: d.toISOString() } });
+}
 async function tiempo(env, d) { await guardar(env, 'tiempo', d, await pedirConReintentos(TIEMPO)); }
 
 // iBus: próximas llegadas en 25 paradas de control, por turnos (el turno sale del minuto: no hace falta guardar estado)
@@ -102,6 +122,8 @@ export default {
     const tareas = { bicing: () => bicing(env, d, min) };
     if (toca('trafico', 5)) tareas.trafico = () => trafico(env, d);
     if (toca('tiempo', 15)) tareas.tiempo = () => tiempo(env, d);
+    if (toca('incidencias_bcn', 5)) tareas.incidencias_bcn = () => incidencias(env, d);
+    if (toca('incidencias_sct', 5)) tareas.incidencias_sct = () => incidenciasSct(env, d);
     if (min % 2 === 0 && env.TMB_APP_ID && env.TMB_APP_KEY) tareas.bus = () => ibus(env, d, min);
     const nombres = Object.keys(tareas), res = await Promise.allSettled(nombres.map(k => tareas[k]()));
     nombres.forEach((k, i) => {
