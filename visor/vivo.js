@@ -9,7 +9,9 @@
 const K=window.CITY3D; if(!K||!K.CITY) return;
 const THREE=K.THREE, U=K.U, INK=K.INK, LDIR=K.LDIR;
 const VIVO=K.BASE+'vivo/';
-const VEH_MPP=1.1;                 // por debajo de esto (m/px) se ven los vehículos
+const VEH_MPP=2.2;                 // por debajo de esto (m/px) circulan coches y buses (de lejos, como puntitos: la ciudad nunca se ve quieta)
+const PARK_MPP=1.1;                // los aparcados solo de cerca: de lejos no aportan y son miles
+let VSC=1;                         // de lejos los vehículos en marcha se dibujan algo más grandes para que se distingan
 const MOVIL=!!K.movil;             // móvil o tablet: menos vehículos y personas a la vez
 const CAR_CAP=900, BUS_CAP=110, MOVE_CAP=MOVIL?550:1200, PARK_CAP=MOVIL?1200:2500;   // por modelo: circulando y aparcados (aparte)
 const TX=window.T||((es)=>es), NUM=window.NUM||(n=>Number(n).toLocaleString('es'));     // idioma (lo define index.html)
@@ -410,7 +412,7 @@ function step(dt){
     if(r.list.some(v=>v.dead)) r.list=r.list.filter(v=>!v.dead);
     const M=r.mat.array, Cc=r.color.array; let k=0;
     for(const v of r.list){
-      place(v,PB,0); writePose(M,k,PB[0],PB[1],PB[2],PB[3]); if(v.bus) nBuses++; else nCars++; if(v.v<0.3) nStopped++;
+      place(v,PB,0); writePose(M,k,PB[0],PB[1],PB[2],PB[3]*VSC); if(v.bus) nBuses++; else nCars++; if(v.v<0.3) nStopped++;
       v.px=v.x=PB[0]; v.pz=v.z=PB[1]; v.ang=PB[2]; gridPut(carGrid,v);
       Cc[k*3]=v.col[0]; Cc[k*3+1]=v.col[1]; Cc[k*3+2]=v.col[2]; k++; }
     setCount(r,k);
@@ -502,7 +504,7 @@ function busStep(now,dt){
       if(j) BB.set(j[1],tr); }
     tr.x=out[0]; tr.z=out[1]; tr.ang=out[2]; tr.len=r.model.len; tr.v=sp; gridPut(BG,tr);
     if(r.n>=r.cap) continue;
-    writePose(r.mat.array,r.n,out[0],out[1],out[2],out[3]);
+    writePose(r.mat.array,r.n,out[0],out[1],out[2],out[3]*VSC);
     const c=r.color.array; c[r.n*3]=c[r.n*3+1]=c[r.n*3+2]=1; r.n++;
     if(shown.length<40) shown.push([out[0],out[1],line,delayOf(line[0])]);
   }
@@ -1311,6 +1313,7 @@ function frame(now,dt){
   if(K.mode==='under'){ if(metState==='none') loadMetro(); if(MET){ metroStep(now); if(now-lastPanel>2000){ lastPanel=now; panel(); } return true; } return false; }
   if(!city) return false;
   const mpp=K.mppNow();
+  VSC=Math.min(1.8,Math.max(1,mpp/1.1));
   const wxAnim=wxStep(now,dt,mpp);
   ribbonGroup.visible=ON.trafico&&!!ribbon; ribbonMat.uniforms.w.value=mpp*2.2; ribbonMat.uniforms.op.value=mpp<0.8?0.35:0.9;
   bikeGroup.visible=ON.bicing&&!!bars;
@@ -1328,6 +1331,7 @@ function frame(now,dt){
   if(ON.personas&&mpp<PED_MPP&&RED&&CALZ){ if(!PN) prepPed(); if(!PEDR) PEDR=PED_MODELS.map(m=>makeRenderer(m,PED_CAP)); pedFrame(now,dt); ped=true; }
   else if(PEDR){ for(const r of PEDR) setCount(r,0); nPed=nPedWait=0; }
   { const hi=mpp<HI_MPP; for(const r of [...(RC||[]),...(RB||[]),...(RP||[]),...(RBC||[])]){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
+  if(RP&&mpp>=PARK_MPP) for(const r of RP){ for(const im of r.hi) im.visible=false; for(const im of r.lo) im.visible=false; }
   if(PEDR){ const hi=mpp<PED_HI; for(const r of PEDR){ for(const im of r.hi) im.visible=hi; for(const im of r.lo) im.visible=!hi; } }
   anim=anim||cyc||ped;
   vehGroup.visible=anim; if(!anim||!BUS) hideBusLabels();
