@@ -1697,13 +1697,13 @@ function incReales(frases){
 let incEstado='pendiente';
 async function loadIncidencias(){
   try{ incEstado=incEstado==='pendiente'?'pidiendo avisos':incEstado;
-    const r=await fetch('/api/incidencias',{cache:'no-store'}); if(!r.ok){ incEstado='el servidor respondió '+r.status; panel(); return; }
+    const r=await fetch('/api/incidencias',{cache:'no-store'}); if(!r.ok){ incEstado='el servidor respondió '+r.status; incLast=performance.now()-20000; panel(); return; }
     const d=await r.json(), fr=d.frases||[];
     if(JSON.stringify(fr)===JSON.stringify(incFrases)){ return; }
     if(callState==='none'||callState==='missing'){ incEstado='cargando el callejero'; await loadCallejero(); }
-    if(!CALL){ incEstado='no se pudo cargar el callejero ('+(LOADERR.callejero||'?')+')'; incLast=performance.now()-110000; panel(); return; }   // se reintenta en 10 s
+    if(!CALL){ incEstado='no se pudo cargar el callejero ('+(LOADERR.callejero||'?')+')'; incLast=performance.now()-20000; panel(); return; }   // se reintenta en 10 s
     incReales(fr); incFrases=fr; incEstado='ok'; panel(); }
-  catch(e){ incEstado='error: '+String(e&&e.message||e).slice(0,80); console.warn('vivo: incidencias',e); panel(); } }
+  catch(e){ incEstado='error: '+String(e&&e.message||e).slice(0,80); incLast=performance.now()-20000; console.warn('vivo: incidencias',e); panel(); } }   // fallo: otra vez en 10 s
 const _ic=new THREE.Color();
 // ¿cae (calle, sentido, carril, posición) dentro de una incidencia? (para no hacer aparecer coches ahí)
 function incDentro(ei,dir,lane,s){ const l=INC_OBS.get(ei); if(!l) return false; const e=RED.E[ei], u=dir?e.len-s:s;
@@ -1757,7 +1757,7 @@ function frame(now,dt){
   // incidencias: lo primero y por separado (tienen su propio grupo): un fallo en otra capa no las deja ocultas
   let incA=false;
   try{ if(INC_DEMO&&!incReady&&RED&&tramState!=='loading'&&tramState!=='none'){ incReady=true; incDemo(); }
-    if(!INC_DEMO&&RED&&now-incLast>120000){ incLast=now; loadIncidencias(); }     // avisos reales del Ayuntamiento, cada 2 min
+    if(!INC_DEMO&&RED&&now-incLast>30000){ incLast=now; loadIncidencias(); }      // avisos reales del Ayuntamiento, cada 30 s (si falla, a los 10 s)
     incGroup.visible=INCS.length>0; incA=INCS.length?incStep(now,dt,mpp):false; }
   catch(e){ if(!simErr){ simErr='incidencias: '+String(e&&e.stack||e).slice(0,280); console.error('vivo:',e); panel(); } }
   ribbonGroup.visible=ON.trafico&&!!ribbon; ribbonMat.uniforms.w.value=mpp*2.2; ribbonMat.uniforms.op.value=mpp<0.8?0.35:0.9;
