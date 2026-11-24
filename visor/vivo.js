@@ -1087,7 +1087,7 @@ function wxLine(){
 let WX=null;
 const H={
   trafico:d=>{ TRAF=new Map(d.tramos.map(r=>[r[0],r[1]])); candDirty=true; if(tramosState==='none') loadTramos(); else recolor(); },
-  bicing:d=>{ BIKE=d; buildBars(d); if(BK) queueBikeEvents(d); },
+  bicing:d=>{ const primero=!BIKE; BIKE=d; buildBars(d); if(BK){ queueBikeEvents(d); if(primero) warmStart(); } },   // red ciclista antes que Bicing: arranque en caliente aquí
   tiempo:d=>{ WX=d; wxT=null; },
   bus:d=>{ BUSDELAY=d.lineas||{}; BUSDELAY_INFO=d; busLastScan=0; },
 };
@@ -1293,6 +1293,10 @@ window.__vivo={
   setOn:(k,v)=>{ ON[k]=!!v; K.dirty(); panel(); }, get ON(){ return {...ON}; }, get peds(){ return peds; }, isRoad:(x,z)=>CALZ?isRoad(x,z):null, pedXY:p=>{ const o=new Float32Array(4); pedPos(p,o); return [o[0],o[1]]; },   // el test apaga y enciende capas sin tocar lo guardado
   wxSnap:()=>{ wxT=wxTarget(); for(const k in WXV) WXV[k]=wxT[k]; K.dirty(); },
   wx:()=>({...WXV,sim:wxSim,t:wxT,m1:wxM1.visible,m2:wxM2.visible,u:Object.fromEntries(Object.entries(wxMul.uniforms).map(([k,v])=>[k,typeof v.value==='number'?v.value:'·']))}),stats:()=>({lamps:lamps&&lamps.visible?nLamps:0,lmLights:lamps&&lamps.visible?nLmLights:0,ribbons:!!(ribbon&&ribbonGroup.visible),tramos:TRAF?TRAF.size:0,tramosState,bikeStations:BIKE&&BIKE.estaciones?BIKE.estaciones.length:0,bars:!!(bars&&bikeGroup.visible),wxM1:wxM1.visible,wxM2:wxM2.visible,manifest:!manifestErr,capas:manifest&&manifest.capas?Object.fromEntries(Object.entries(manifest.capas).map(([k,c])=>[k,c.estado||''])):{},cars:nCars,stopped:nStopped,parked:nParked,buses:nBuses,busAll:nBusAll,busLight:nBusLight,busJunc:nBusJunc,cyc:nCyc,cycLight:nCycLight,peds:nPed,pedWait:nPedWait,pedTarget,calzada:calzState,metro:nMetroAll,red:redState,bus:busState,bici:bkState,err:simErr,loadErr:{...LOADERR}}),get RED(){return RED;},get cand(){return cand;},get area(){return area;},get candTot(){return candTot;},get RC(){return RC;},get RB(){return RB;},get TRAF(){return TRAF;},get busActive(){return busActive;},get cycs(){return cycs;},get cyc(){ return {bkState,queue:cycQueue.length,cycs:cycs.length,area:cycArea,bike:!!BIKE,seen:cycSeen,ev:BIKE&&BIKE.eventos&&BIKE.eventos.length,rbc:!!RBC,cerca:cycs.filter(c=>c.x!==undefined).map(c=>[c.x,c.z,Math.hypot(c.x-cycArea.x,c.z-cycArea.z)]).sort((a,b)=>a[2]-b[2]).slice(0,3)}; },busXY(tr){ const o=new Float32Array(4); busPos(tr,secNow(),o); return [o[0],o[1]]; }};   // inspección
-poll(); setInterval(poll,POLL_MS);
-setTimeout(()=>{ if(ON.vehiculos&&redState==='none') loadRed(); },2500); setInterval(panel,15000);
+// Todo lo que hace falta para acercarse sin sorpresas se carga ya, y index.html mantiene la pantalla de carga hasta que
+// termine (antes, si se hacía zoom en los primeros segundos, coches y personas arrancaban con datos a medio cargar)
+K.listo=Promise.all([poll(),
+  redState==='none'?loadRed():null, busState==='none'?loadBuses():null, bkState==='none'?loadBici():null,
+  ON.personas&&calzState==='none'?loadCalzada():null]).catch(e=>console.warn('vivo: carga inicial',e));
+setInterval(poll,POLL_MS); setInterval(panel,15000);
 })();

@@ -57,6 +57,10 @@
   #legend div{display:flex;align-items:center;gap:7px;margin:2px 0}
   #legend i{width:22px;height:6px;border-radius:3px;display:inline-block}
   #legend small{display:block;color:var(--muted);margin-top:4px;max-width:230px}
+  #legend .lg-cab{all:unset;cursor:pointer;display:flex;justify-content:space-between;gap:14px;width:100%;font-family:"IM Fell English",serif;font-size:16px;padding:2px 0}
+  #legend .lg-cab span{color:var(--muted)}
+  #legend.plegada .lg-cuerpo{display:none}
+  #legend.plegada{max-height:none;overflow:visible}
   #labels{position:fixed;inset:0;pointer-events:none;overflow:hidden}
   .st{position:absolute;transform:translate(-50%,-120%);font-family:"IM Fell English",serif;font-style:italic;font-size:13px;white-space:nowrap;
       color:var(--ink);background:rgba(243,232,208,.85);padding:0 4px;border-radius:2px}
@@ -779,9 +783,13 @@ if(metro){
 }
 
 // Leyenda del metro (en «Subsuelo"); con el horario real (vivo.js pone CITY3D.metroLive) cambia la nota
+// Plegable: en el móvil, incrustada o en pantallas bajas empieza plegada (antes se quedaba en medio del mapa sin poder quitarla)
+let legendFolded=MOVIL||EMBED||innerHeight<760;
+$('legend').addEventListener('click',e=>{ if(!e.target.closest('.lg-cab')) return; legendFolded=!legendFolded; renderLegend(); });
 function renderLegend(){ if(!metro||!metro.legendHTML) return; const live=window.CITY3D&&window.CITY3D.metroLive;
-  $('legend').innerHTML=metro.legendHTML+`<small>${live?T('Trazado real (GTFS de TMB). Profundidad estimada · trenes según el horario real de TMB.','Real routes (TMB GTFS). Estimated depth · trains follow the real TMB timetable.')
-    :T('Trazado real (GTFS de TMB). Profundidad estimada y trenes simulados.','Real routes (TMB GTFS). Estimated depth and simulated trains.')}</small>`; }
+  const L=$('legend'); L.classList.toggle('plegada',legendFolded);
+  L.innerHTML=`<button class="lg-cab" aria-expanded="${!legendFolded}">${T('Líneas de metro','Metro lines')}<span>${legendFolded?'▸':'▾'}</span></button><div class="lg-cuerpo">`+metro.legendHTML+`<small>${live?T('Trazado real (GTFS de TMB). Profundidad estimada · trenes según el horario real de TMB.','Real routes (TMB GTFS). Estimated depth · trains follow the real TMB timetable.')
+    :T('Trazado real (GTFS de TMB). Profundidad estimada y trenes simulados.','Real routes (TMB GTFS). Estimated depth and simulated trains.')}</small></div>`; }
 renderLegend();
 
 /* ---------- Monumentos ---------- */
@@ -1645,7 +1653,18 @@ $('bBench').onclick=()=>{
 
 paso('primer dibujo');
 const LOAD_MS=performance.now()-T0;
-$('load').style.opacity=0; setTimeout(()=>$('load').style.display='none',500);
+// La pantalla de carga sigue hasta que vivo.js tenga calles, horarios, red ciclista, aceras y los primeros datos en vivo
+// (K.listo), con un tope de 15 s por si alguna fuente externa tarda. Mientras está puesta, el mapa no recibe ni rueda ni dedos.
+$('bar').firstElementChild.style.width='100%';
+$('msg').removeAttribute('data-en');
+$('msg').textContent=T('Preparando el tráfico, los buses y los datos en vivo…','Preparing traffic, buses and live data…');
+(async()=>{
+  const t=performance.now();
+  while(!(window.CITY3D&&window.CITY3D.listo)&&performance.now()-t<15000) await sleep(50);              // vivo.js aún no ha llegado
+  if(window.CITY3D&&window.CITY3D.listo) await Promise.race([window.CITY3D.listo,sleep(Math.max(0,15000-(performance.now()-t)))]);
+  await sleep(400);                                                                                          // un respiro para el primer dibujo con todo
+  dirty=true; $('load').style.opacity=0; setTimeout(()=>$('load').style.display='none',500);
+})();
 /* ================= Capa en vivo (visor/vivo.js): tráfico, vehículos, Bicing, tiempo… ================= */
 window.CITY3D={THREE,scene,cam,controls,renderer,U,LMS,LDIR,INK,BASE,CITY,mppNow,frameHooks:[],metro,metroGroup,trainSets,dirty:()=>{ dirty=true; },get mode(){ return mode; },
   movil:MOVIL, renderLegend, LIVE_BTN:$('bLive'), origin:index.origin};
