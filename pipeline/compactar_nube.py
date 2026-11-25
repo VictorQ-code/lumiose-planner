@@ -1,13 +1,13 @@
-"""Compactación nocturna del histórico en la nube (R2). La lanza GitHub Actions cada noche; no hay que tocar nada.
+"""Flujo nocturno de datos en la nube (R2): bronze -> silver -> gold + catálogo y calidad. Lo lanza GitHub Actions cada noche.
 
 El Worker de Cloudflare guarda cada captura suelta en  bronze/<fuente>/fecha=AAAA-MM-DD/HHMMSSZ.json.gz  (unas 2.500 al día).
 Cada noche este script las agrupa en archivos cada vez más grandes, sin perder datos, para que ocupen lo mínimo:
 
-  día      historico/dia/<fuente>/2026-11-24.parquet       + .crudo.jsonl.xz   (las capturas sueltas del día)
-  semana   historico/semana/<fuente>/2026-W48.parquet      + .crudo.jsonl.xz   (7 días, semana ISO de lunes a domingo)
-  mes      historico/mes/<fuente>/2026-11.parquet          + .crudo.jsonl.xz   (las 4-5 semanas cuyo jueves cae en ese mes)
-  año      historico/ano/<fuente>/2026.parquet                                  (12 meses)
-  década   historico/decada/<fuente>/2020s.parquet                              (10 años)
+  día      silver/dia/<fuente>/2026-11-24.parquet       + .crudo.jsonl.xz   (las capturas sueltas del día)
+  semana   silver/semana/<fuente>/2026-W48.parquet      + .crudo.jsonl.xz   (7 días, semana ISO de lunes a domingo)
+  mes      silver/mes/<fuente>/2026-11.parquet          + .crudo.jsonl.xz   (las 4-5 semanas cuyo jueves cae en ese mes)
+  año      silver/ano/<fuente>/2026.parquet                                  (12 meses)
+  década   silver/decada/<fuente>/2020s.parquet                              (10 años)
 
 - .parquet: los datos ya ordenados en tabla (por columnas y comprimido con zstd): es lo que usan los análisis y la IA.
 - .crudo.jsonl.xz: las respuestas originales tal cual llegaron, por si algún día hay que volver a leerlas.
@@ -15,12 +15,12 @@ Cada noche este script las agrupa en archivos cada vez más grandes, sin perder 
   así 10 años caben de sobra en los 10 GB gratuitos de R2.
 - Un grupo solo se cierra cuando su periodo ha terminado, y los archivos pequeños solo se borran cuando el grande
   ya está subido y comprobado. Si algo falla, no se borra nada y se reintenta la noche siguiente.
-- historico/indice.json lleva el inventario (filas, tamaño y fechas de cada archivo) y data/gold/barcelona/historico.json
+- silver/indice.json lleva el inventario (filas, tamaño y fechas de cada archivo) y data/gold/barcelona/historico.json
   un resumen para la web (y para que GitHub vea actividad y no pare la tarea programada).
 
 Uso:
   python pipeline/compactar_nube.py                    contra R2 (claves en R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY)
-  python pipeline/compactar_nube.py --prueba           escribe en prueba/historico/ y no borra nada
+  python pipeline/compactar_nube.py --prueba           escribe en prueba/ (silver, gold, catálogo) y no borra nada
   python pipeline/compactar_nube.py --local CARPETA    contra una carpeta del PC con la misma estructura (para tests)
   python pipeline/compactar_nube.py --hoy 2026-12-01   como si hoy fuera esa fecha (para tests)
 """
@@ -92,6 +92,9 @@ class R2:
         except self.s3.exceptions.ClientError:
             return None
 
+    def copiar(self, origen: str, destino: str) -> None:                  # dentro de R2, sin bajar nada
+        self.s3.copy_object(Bucket=BUCKET, Key=destino, CopySource={"Bucket": BUCKET, "Key": origen})
+
     def borrar(self, claves: list[str]) -> None:
         for i in range(0, len(claves), 1000):
             r = self.s3.delete_objects(Bucket=BUCKET, Delete={"Objects": [{"Key": k} for k in claves[i:i + 1000]], "Quiet": True})
@@ -125,6 +128,10 @@ class Local:
 
     def tamano(self, clave: str) -> int | None:
         return self._p(clave).stat().st_size if self._p(clave).exists() else None
+
+    def copiar(self, origen: str, destino: str) -> None:
+        self._p(destino).parent.mkdir(parents=True, exist_ok=True)
+        self._p(destino).write_bytes(self._p(origen).read_bytes())
 
     def borrar(self, claves: list[str]) -> None:
         for k in claves:
@@ -350,14 +357,38 @@ NIVELES = [  # (hijo, padre, clave del padre, fin del padre, ¿se queda el crudo
 class Compactador:
     def __init__(self, alm, hoy: date, prueba: bool):
         self.alm, self.hoy, self.prueba = alm, hoy, prueba
-        self.base = ("prueba/" if prueba else "") + "historico/"
+        self.raiz = "prueba/" if prueba else ""
+        self.base = self.raiz + "silver/"
         self.tmp = Path(tempfile.mkdtemp(prefix="compactar_"))
         self.errores: list[str] = []
         self.hecho: list[str] = []
+        self.mudar()
         try:
             self.indice = json.loads(self.alm.leer(self.base + "indice.json")[0])
         except Exception:  # noqa: BLE001  (primera vez)
             self.indice = {"archivos": {}}
+
+    # ---------- mudanza (una sola vez): la carpeta historico/ pasa a llamarse silver/ ----------
+    def mudar(self) -> None:
+        viejo = self.raiz + "historico/"
+        antes = self.alm.listar(viejo)
+        if not antes:
+            return
+        n = 0
+        for k, tam in antes.items():
+            nuevo = self.base + k[len(viejo):]
+            if k.endswith("indice.json"):
+                txt = self.alm.leer(k)[0].decode("utf-8").replace(f'"{viejo}', f'"{self.base}')   # las claves del inventario
+                ri = self.tmp / "indice_mudado.json"
+                ri.write_text(txt, encoding="utf-8")
+                self.alm.subir(ri, nuevo, "application/json")
+            else:
+                self.alm.copiar(k, nuevo)
+                if self.alm.tamano(nuevo) != tam:
+                    raise RuntimeError(f"mudanza: {nuevo} no coincide con {k}; no se borra nada")
+            n += 1
+        self.alm.borrar(list(antes))
+        log(f"mudanza: {n} archivos de {viejo} a {self.base}")
 
     # ---------- utilidades ----------
     def _ts_de(self, clave: str, meta: dict, dia: str) -> datetime:
@@ -537,9 +568,461 @@ class Compactador:
         return resumen
 
 
+# =====================================================================================================
+# GOLD: tablas listas para la IA (todo en la misma rejilla de 15 minutos, UTC + hora de Barcelona)
+#   gold/<tabla>/fecha=AAAA-MM-DD/parte.parquet      hechos por día de Barcelona (se leen con DuckDB, hive_partitioning)
+#   gold/dim/<tabla>.parquet                          referencias: calendario, estaciones, tramos (se rehacen cada noche)
+#   catalogo/tablas.json · catalogo/LEEME.md          qué es cada tabla y cada columna, y cómo leerlas
+#   catalogo/calidad/fecha=AAAA-MM-DD.json · catalogo/calidad.parquet   parte diario: capturas, cobertura, huecos
+# Todo se puede rehacer desde silver/: gold nunca es el único sitio donde está un dato.
+# =====================================================================================================
+import numpy as np  # noqa: E402  (viene con pyarrow)
+
+Q = 900                                    # 15 minutos, en segundos
+ESPERADAS = {"bicing": 1440, "bicing_info": 4, "trafico": 288, "tiempo": 96, "bus": 720, "incidencias_bcn": 288, "incidencias_sct": 288}
+INDEX = ROOT / "data" / "gold" / "barcelona" / "index.json"
+TRAMOS = ROOT / "data" / "gold" / "barcelona" / "vivo" / "tramos.json"
+T_LOCAL = pa.timestamp("s")                # hora de Barcelona sin zona (para leerla a simple vista)
+
+
+def _dia_utc(d: date) -> tuple[int, int]:
+    """Segundos UTC de inicio y fin del día d de Barcelona (23 o 25 h en los cambios de hora)."""
+    a = datetime(d.year, d.month, d.day, tzinfo=MADRID)
+    b = a + timedelta(days=1)
+    return int(a.timestamp()), int(datetime(b.year, b.month, b.day, tzinfo=MADRID).timestamp())
+
+
+def _local(seg: np.ndarray) -> pa.Array:
+    """Segundos UTC -> hora de Barcelona sin zona (con zoneinfo: no depende de la base de zonas de pyarrow)."""
+    cache: dict[int, int] = {}
+    out = np.empty(len(seg), dtype="int64")
+    for i, s in enumerate(seg.astype("int64")):
+        h = int(s) // 3600
+        if h not in cache:
+            cache[h] = int(datetime.fromtimestamp(h * 3600, MADRID).utcoffset().total_seconds())
+        out[i] = s + cache[h]
+    return pa.array(out, type=T_LOCAL)
+
+
+def _segundos(col) -> np.ndarray:
+    return pc.cast(col, pa.timestamp("s", tz="UTC")).cast(pa.int64()).to_numpy(zero_copy_only=False)
+
+
+def _ultimos(clave: np.ndarray) -> np.ndarray:
+    """Con 'clave' ordenada: índice de la última fila de cada grupo."""
+    return np.flatnonzero(np.r_[clave[1:] != clave[:-1], True])
+
+
+class Oro:
+    def __init__(self, c: "Compactador"):
+        self.c, self.alm, self.tmp = c, c.alm, c.tmp
+        self.base = c.raiz + "gold/"
+        self.cat = c.raiz + "catalogo/"
+        self.hecho: list[str] = []
+
+    # ---------- lectura de silver por fechas (del nivel que sea: día, semana, mes…) ----------
+    def silver(self, fuente: str, s0: int, s1: int) -> pa.Table | None:
+        esquema = FUENTES[fuente][2]
+        partes = []
+        for k, v in self.c.indice["archivos"].items():
+            if f"/{fuente}/" not in k or not k.endswith(".parquet") or not v.get("desde"):
+                continue
+            a = datetime.fromisoformat(v["desde"]).timestamp(); b = datetime.fromisoformat(v["hasta"]).timestamp()
+            if b < s0 or a >= s1:
+                continue
+            ruta = self.tmp / ("s_" + k.replace("/", "_"))
+            if not ruta.exists():
+                self.alm.bajar(k, ruta)
+            t = pq.read_table(ruta).cast(esquema)
+            s = _segundos(t["ts"])
+            partes.append(t.filter(pa.array((s >= s0) & (s < s1))))
+        return pa.concat_tables(partes) if partes else None
+
+    def _subir(self, tabla: pa.Table, clave: str) -> None:
+        ruta = self.tmp / ("g_" + clave.replace("/", "_").replace("=", "_"))
+        pq.write_table(tabla, ruta, compression="zstd", compression_level=9, use_dictionary=True, write_statistics=True)
+        self.c._subir_comprobado(ruta, clave, "application/vnd.apache.parquet")
+        ruta.unlink()
+
+    def _dia(self, tabla: str, d: date) -> str:
+        return f"{self.base}{tabla}/fecha={d.isoformat()}/parte.parquet"
+
+    # ---------- qué días toca (re)hacer ----------
+    def dias_pendientes(self) -> list[date]:
+        hechos = {re.search(r"fecha=(\d{4}-\d{2}-\d{2})", k).group(1) for k in self.alm.listar(self.base + "bicing_15min/")}
+        con_datos = set()
+        for k, v in self.c.indice["archivos"].items():
+            if "/bicing/" in k and v.get("desde"):
+                d0 = datetime.fromisoformat(v["desde"]).astimezone(MADRID).date()
+                d1 = datetime.fromisoformat(v["hasta"]).astimezone(MADRID).date()
+                while d0 <= d1:
+                    con_datos.add(d0); d0 += timedelta(days=1)
+        reciente = self.c.hoy - timedelta(days=3)                   # los últimos días se rehacen (capturas que llegan tarde)
+        return sorted(d for d in con_datos if d < self.c.hoy and (d.isoformat() not in hechos or d >= reciente))
+
+    # ---------- referencias ----------
+    def dimensiones(self) -> dict:
+        import requests
+        dims = {}
+        # barrios (contorno en coordenadas del visor) para situar estaciones y tramos
+        idx = json.loads(INDEX.read_text(encoding="utf-8"))
+        barrios = [(b["nom"], b.get("districte"), b["outline"]) for b in idx["barrios"]]
+
+        def barrio(x, z):
+            for nom, dis, r in barrios:
+                dentro = False
+                for (x0, z0), (x1, z1) in zip(r, r[1:] + r[:1]):
+                    if (z0 > z) != (z1 > z) and x < x0 + (z - z0) * (x1 - x0) / (z1 - z0):
+                        dentro = not dentro
+                if dentro:
+                    return nom, dis
+            return None, None
+        sys.path.insert(0, str(ROOT / "pipeline"))
+        from geo import a_local                                    # noqa: E402
+        # estaciones de Bicing: la última foto de su información
+        info = self.silver("bicing_info", 0, 2**31)
+        if info is not None and info.num_rows:
+            ult = {}
+            for r in info.sort_by([("ts", "ascending")]).to_pylist():
+                ult[r["id"]] = r
+            filas = []
+            for r in ult.values():
+                x, z = a_local(r["lon"], r["lat"]) if r["lat"] else (None, None)
+                nom, dis = barrio(x, z) if x is not None else (None, None)
+                filas.append({"estacion_id": r["id"], "nombre": r["nombre"], "lat": r["lat"], "lon": r["lon"], "capacidad": r["capacidad"],
+                              "barrio": nom, "distrito": dis, "x": x, "z": z})
+            dims["estaciones_bicing"] = pa.Table.from_pylist(filas)
+        # tramos de tráfico municipales (geometría ya en el repositorio)
+        if TRAMOS.exists():
+            filas = []
+            for tid, desc, c in json.loads(TRAMOS.read_text(encoding="utf-8"))["tramos"]:
+                k = (len(c) // 4) * 2
+                nom, dis = barrio(c[k], c[k + 1]) if len(c) >= 2 else (None, None)
+                filas.append({"tramo_id": int(tid), "descripcion": desc, "barrio": nom, "distrito": dis, "x": c[k] if c else None, "z": c[k + 1] if c else None,
+                              "longitud_m": float(sum(np.hypot(np.diff(c[0::2]), np.diff(c[1::2])))) if len(c) >= 4 else None})
+            dims["tramos_trafico"] = pa.Table.from_pylist(filas)
+        # calendario: festivos oficiales de Cataluña y locales de Barcelona (Generalitat, datos abiertos)
+        fest = {}
+        try:
+            api = "https://analisi.transparenciacatalunya.cat/resource/"
+            for r in requests.get(api + "yf2b-mjr6.json", params={"$limit": 5000}, timeout=60).json():
+                fest[r["data"][:10]] = "festivo oficial"
+            for r in requests.get(api + "b4eh-r8up.json", params={"$limit": 5000, "codi_municipal": "08019000", "pedania": "000"}, timeout=60).json():
+                fest[r["data"][:10]] = "festivo local de Barcelona"
+        except Exception as e:  # noqa: BLE001
+            self.c.errores.append(f"calendario: no se pudieron leer los festivos ({e})")
+        filas, d = [], date(2026, 1, 1)
+        while d <= date(self.c.hoy.year + 1, 12, 31):
+            a, b = _dia_utc(d)
+            filas.append({"fecha": d, "dia_semana": d.isoweekday(), "fin_de_semana": d.isoweekday() >= 6,
+                          "festivo": d.isoformat() in fest, "tipo_festivo": fest.get(d.isoformat()), "laborable": d.isoweekday() < 6 and d.isoformat() not in fest,
+                          "horas_del_dia": (b - a) // 3600, "horario_verano": bool(datetime(d.year, d.month, d.day, 12, tzinfo=MADRID).dst())})
+            d += timedelta(days=1)
+        dims["calendario"] = pa.Table.from_pylist(filas)
+        for nom, t in dims.items():
+            self._subir(t, f"{self.base}dim/{nom}.parquet")
+        self.hecho.append("referencias: " + ", ".join(f"{k} ({v.num_rows})" for k, v in dims.items()))
+        log(self.hecho[-1])
+        return dims
+
+    # ---------- hechos de un día ----------
+    def bicing_15min(self, d: date, dims: dict) -> pa.Table | None:
+        s0, s1 = _dia_utc(d)
+        t = self.silver("bicing", s0 - 300, s1)                    # 5 min antes: para medir la primera cogida del día
+        if t is None or not t.num_rows:
+            return None
+        t = t.sort_by([("id", "ascending"), ("ts", "ascending")])
+        ids = t["id"].to_numpy(zero_copy_only=False).astype(str); s = _segundos(t["ts"])
+        mec = t["mecanicas"].to_numpy(zero_copy_only=False).astype(float); ele = t["electricas"].to_numpy(zero_copy_only=False).astype(float)
+        anc = t["anclajes_libres"].to_numpy(zero_copy_only=False).astype(float); act = t["activa"].to_numpy(zero_copy_only=False)
+        bic = mec + ele
+        mismo = np.r_[False, (ids[1:] == ids[:-1]) & (np.diff(s) <= 300)]   # lectura anterior de la misma estación, ≤ 5 min
+        dif = np.where(mismo, np.r_[0, np.diff(bic)], 0)
+        dentro = s >= s0
+        ids, s, mec, ele, anc, act, bic, dif = (a[dentro] for a in (ids, s, mec, ele, anc, act, bic, dif))
+        cub = (s // Q) * Q
+        clave = np.char.add(np.char.add(ids, "|"), cub.astype(str))
+        orden = np.lexsort((s, clave)); ids, s, mec, ele, anc, act, bic, dif, cub, clave = (a[orden] for a in (ids, s, mec, ele, anc, act, bic, dif, cub, clave))
+        fin = _ultimos(clave); ini = np.r_[0, fin[:-1] + 1]
+        n = fin - ini + 1
+        coge = np.add.reduceat(np.maximum(-dif, 0), ini); deja = np.add.reduceat(np.maximum(dif, 0), ini)
+        media = np.add.reduceat(bic, ini) / n
+        # capacidad: la publicada si la hay; si no (citybik.es no la da), anclajes en servicio = bicis + anclajes libres
+        cap = {r["estacion_id"]: r["capacidad"] for r in dims.get("estaciones_bicing", pa.table({"estacion_id": [], "capacidad": []})).to_pylist()}
+        capa = np.array([cap.get(i) or np.nan for i in ids[fin]], dtype=float)
+        capa = np.where(np.isnan(capa), bic[fin] + anc[fin], capa)
+        return pa.table({"estacion_id": ids[fin], "t": pa.array(cub[fin], type=pa.timestamp("s", tz="UTC")), "t_local": _local(cub[fin]),
+                         "bicis": bic[fin].astype("int16"), "mecanicas": mec[fin].astype("int16"), "electricas": ele[fin].astype("int16"),
+                         "anclajes_libres": anc[fin].astype("int16"), "bicis_media": media.astype("float32"),
+                         "cogidas": coge.astype("int16"), "dejadas": deja.astype("int16"), "capacidad": capa.astype("float32"),
+                         "ocupacion": np.where(capa > 0, bic[fin] / capa, np.nan).astype("float32"), "activa": act[fin].astype(bool), "lecturas": n.astype("int16")})
+
+    def trafico_15min(self, d: date) -> pa.Table | None:
+        s0, s1 = _dia_utc(d)
+        t = self.silver("trafico", s0 - 3600, s1 + 3600)
+        if t is None or not t.num_rows:
+            return None
+        fd = t["fecha_dato"]; s = np.where(pc.is_null(fd).to_numpy(zero_copy_only=False), _segundos(t["ts"]), _segundos(pc.fill_null(fd, t["ts"])))
+        ids = t["id"].to_numpy(zero_copy_only=False).astype("int32"); est = t["estado"].to_numpy(zero_copy_only=False).astype("int16")
+        pre = t["previsto"].to_numpy(zero_copy_only=False).astype("int16")
+        ok = (s >= s0) & (s < s1); ids, s, est, pre = ids[ok], s[ok], est[ok], pre[ok]
+        if not len(s):
+            return None
+        cub = (s // Q) * Q
+        orden = np.lexsort((s, cub, ids)); ids, s, est, pre, cub = ids[orden], s[orden], est[orden], pre[orden], cub[orden]
+        clave = ids.astype("int64") * 10**10 + cub
+        fin = _ultimos(clave); ini = np.r_[0, fin[:-1] + 1]
+        return pa.table({"tramo_id": ids[fin], "t": pa.array(cub[fin], type=pa.timestamp("s", tz="UTC")), "t_local": _local(cub[fin]),
+                         "estado": est[fin], "estado_max": np.maximum.reduceat(est, ini), "previsto": pre[fin],
+                         "lecturas": (fin - ini + 1).astype("int16")})
+
+    def tiempo_15min(self, d: date) -> pa.Table | None:
+        s0, s1 = _dia_utc(d)
+        t = self.silver("tiempo", s0 - 6 * 3600, s1)               # unas horas antes: para rellenar el principio del día
+        if t is None or not t.num_rows:
+            return None
+        t = t.sort_by([("ts", "ascending")]); s = _segundos(t["ts"])
+        rejilla = np.arange(s0, s1, Q)
+        i = np.searchsorted(s, rejilla + Q - 1, side="right") - 1     # la última lectura hasta el final de cada cuarto de hora
+        ok = i >= 0; i = np.where(ok, i, 0)
+        cols = {"t": pa.array(rejilla, type=pa.timestamp("s", tz="UTC")), "t_local": _local(rejilla)}
+        okp = pa.array(ok)
+        for c in ("temperatura", "sensacion", "humedad", "precipitacion_mm", "lluvia_mm", "codigo", "nubes", "viento_kmh", "viento_dir", "es_dia"):
+            col = t[c].combine_chunks().take(pa.array(i))
+            cols[c] = pc.if_else(okp, col, pa.scalar(None, type=col.type))           # sin lectura previa: vacío
+        cols["llueve"] = pc.fill_null(pc.greater(cols["precipitacion_mm"], 0), False)
+        cols["edad_dato_min"] = pa.array(np.where(ok, (rejilla + Q - s[i]) / 60, np.nan).astype("float32"))   # cuánto hace de la lectura usada
+        return pa.table(cols)
+
+    def incidencias(self, d: date) -> pa.Table | None:
+        s0, s1 = _dia_utc(d)
+        filas = []
+        t = self.silver("incidencias_bcn", s0, s1)
+        if t is not None and t.num_rows:
+            g = defaultdict(list)
+            for r in t.to_pylist():
+                g[r["texto"]].append(r)
+            for txt, rs in g.items():
+                ts = sorted(r["ts"] for r in rs)
+                filas.append({"fuente": "Ajuntament", "id": txt[:120], "inicio_visto": ts[0], "fin_visto": ts[-1], "capturas": len(ts),
+                              "tipo": rs[0]["causa"], "efecto": rs[0]["efecto"], "via": rs[0]["via"], "sentido": rs[0]["sentido"], "texto": txt,
+                              "lat": None, "lon": None, "en_barcelona": True})
+        t = self.silver("incidencias_sct", s0, s1)
+        if t is not None and t.num_rows:
+            g = defaultdict(list)
+            for r in t.to_pylist():
+                g[r["id"]].append(r)
+            for iid, rs in g.items():
+                ts = sorted(r["ts"] for r in rs); r = rs[-1]
+                filas.append({"fuente": "SCT", "id": iid, "inicio_visto": ts[0], "fin_visto": ts[-1], "capturas": len(ts), "tipo": r["tipo"],
+                              "efecto": r["subtipo"], "via": r["carretera"], "sentido": r["sentido"], "texto": r["lugar"],
+                              "lat": r["lat"], "lon": r["lon"], "en_barcelona": bool(r["bcn"])})
+        if not filas:
+            return None
+        return pa.Table.from_pylist(filas, schema=pa.schema([("fuente", pa.string()), ("id", pa.string()), ("inicio_visto", TS), ("fin_visto", TS),
+            ("capturas", pa.int32()), ("tipo", pa.string()), ("efecto", pa.string()), ("via", pa.string()), ("sentido", pa.string()), ("texto", pa.string()),
+            ("lat", pa.float32()), ("lon", pa.float32()), ("en_barcelona", pa.bool_())]))
+
+    # ---------- tablas de entrenamiento (hace falta el día siguiente para el objetivo a +30 min) ----------
+    def _gold(self, tabla: str, d: date) -> pa.Table | None:
+        k = self._dia(tabla, d)
+        if self.alm.tamano(k) is None:
+            return None
+        ruta = self.tmp / f"l_{tabla}_{d}.parquet"
+        if not ruta.exists():
+            self.alm.bajar(k, ruta)
+        return pq.read_table(ruta)
+
+    def entreno(self, d: date, tabla: str, clave: str, valor: str, extra: list[str], dims: dict) -> pa.Table | None:
+        partes = [x for x in (self._gold(tabla, d - timedelta(days=1)), self._gold(tabla, d), self._gold(tabla, d + timedelta(days=1))) if x is not None]
+        hoy = self._gold(tabla, d)
+        if hoy is None or self._gold(tabla, d + timedelta(days=1)) is None:
+            return None                                             # aún no se conoce el futuro de las últimas horas del día
+        t = pa.concat_tables(partes)
+        k = t[clave].to_numpy(zero_copy_only=False).astype(str); s = _segundos(t["t"]); v = t[valor].to_numpy(zero_copy_only=False).astype(float)
+        mapa = dict(zip(np.char.add(np.char.add(k, "|"), s.astype(str)), v))
+        k0 = hoy[clave].to_numpy(zero_copy_only=False).astype(str); s0_ = _segundos(hoy["t"])
+        busca = lambda dt: np.array([mapa.get(f"{a}|{b + dt}", np.nan) for a, b in zip(k0, s0_)], dtype="float32")   # noqa: E731
+        cols = {c: hoy[c] for c in [clave, "t", "t_local", valor] + extra}
+        for m in (15, 30, 60):
+            cols[f"{valor}_hace_{m}min"] = busca(-m * 60)
+        cols[f"objetivo_{valor}_30min"] = busca(30 * 60)
+        loc = hoy["t_local"].to_pylist()
+        cols["hora"] = pa.array([x.hour + x.minute / 60 for x in loc], type=pa.float32())
+        cal = {r["fecha"]: r for r in dims["calendario"].to_pylist()} if "calendario" in dims else {}
+        cols["dia_semana"] = pa.array([x.isoweekday() for x in loc], type=pa.int8())
+        cols["laborable"] = pa.array([bool(cal.get(x.date(), {}).get("laborable", x.isoweekday() < 6)) for x in loc])
+        cols["festivo"] = pa.array([bool(cal.get(x.date(), {}).get("festivo", False)) for x in loc])
+        tiempo = self._gold("tiempo_15min", d)
+        if tiempo is not None:
+            tm = {int(a): (b, c, e) for a, b, c, e in zip(_segundos(tiempo["t"]), tiempo["temperatura"].to_pylist(), tiempo["precipitacion_mm"].to_pylist(), tiempo["codigo"].to_pylist())}
+            w = [tm.get(int(x), (None, None, None)) for x in s0_]
+            cols["temperatura"] = pa.array([a for a, _, _ in w], type=pa.float32()); cols["precipitacion_mm"] = pa.array([b for _, b, _ in w], type=pa.float32())
+            cols["codigo_tiempo"] = pa.array([c for _, _, c in w], type=pa.int16())
+        conocido = ~np.isnan(cols[f"objetivo_{valor}_30min"])                    # filas cuyo futuro a +30 min se conoce
+        return pa.table(cols).filter(pa.array(conocido))
+
+    # ---------- parte de calidad de un día ----------
+    def calidad(self, d: date) -> list[dict]:
+        s0, s1 = _dia_utc(d)
+        horas = (s1 - s0) / 86400
+        filas = []
+        for fuente in FUENTES:
+            t = self.silver(fuente, s0, s1)
+            caps = np.unique(_segundos(t["ts"])) if t is not None and t.num_rows else np.array([], dtype="int64")
+            bordes = np.r_[s0, caps, s1]
+            hueco = float(np.max(np.diff(bordes)) / 60) if len(bordes) > 1 else 1440.0
+            esp = ESPERADAS.get(fuente, 0) * horas
+            cob = min(1.0, len(caps) / esp) if esp else None
+            filas.append({"fecha": d, "fuente": fuente, "capturas": int(len(caps)), "esperadas": int(round(esp)), "cobertura": cob,
+                          "mayor_hueco_min": round(hueco, 1), "filas": int(t.num_rows) if t is not None else 0,
+                          "alerta": bool(cob is not None and (cob < 0.9 or hueco > 60))})
+        return filas
+
+    # ---------- todo junto ----------
+    def correr(self) -> None:
+        dims = self.dimensiones()
+        dias = self.dias_pendientes()
+        if not dias:
+            log("gold: nada nuevo"); return
+        cal_nuevas = []
+        for d in dias:
+            for nom, f in (("bicing_15min", lambda: self.bicing_15min(d, dims)), ("trafico_15min", lambda: self.trafico_15min(d)),
+                           ("tiempo_15min", lambda: self.tiempo_15min(d)), ("incidencias", lambda: self.incidencias(d))):
+                try:
+                    t = f()
+                    if t is not None:
+                        self._subir(t, self._dia(nom, d))
+                        self.hecho.append(f"gold {nom} {d}: {t.num_rows:,} filas"); log(self.hecho[-1])
+                except Exception as e:  # noqa: BLE001
+                    self.c.errores.append(f"gold {nom} {d}: {e}"); log("ERROR gold", nom, d, e)
+            try:
+                cal_nuevas += self.calidad(d)
+            except Exception as e:  # noqa: BLE001
+                self.c.errores.append(f"calidad {d}: {e}")
+        # entrenamiento: el día anterior a cada día rehecho (ya se conoce su futuro a +30 min)
+        for d in sorted({x - timedelta(days=1) for x in dias} | set(dias)):
+            for nom, args in (("entreno_bicing", ("bicing_15min", "estacion_id", "bicis", ["capacidad", "ocupacion", "cogidas", "dejadas"])),
+                              ("entreno_trafico", ("trafico_15min", "tramo_id", "estado", ["previsto"]))):
+                try:
+                    t = self.entreno(d, *args, dims)
+                    if t is not None and t.num_rows:
+                        self._subir(t, self._dia(nom, d))
+                        self.hecho.append(f"gold {nom} {d}: {t.num_rows:,} filas"); log(self.hecho[-1])
+                except Exception as e:  # noqa: BLE001
+                    self.c.errores.append(f"gold {nom} {d}: {e}"); log("ERROR gold", nom, d, e)
+        self.guardar_calidad(cal_nuevas)
+        self.catalogo(dims)
+
+    def guardar_calidad(self, nuevas: list[dict]) -> None:
+        if not nuevas:
+            return
+        clave = self.cat + "calidad.parquet"
+        viejas = []
+        if self.alm.tamano(clave) is not None:
+            r = self.tmp / "calidad_prev.parquet"; self.alm.bajar(clave, r); viejas = pq.read_table(r).to_pylist()
+        hechos = {(x["fecha"], x["fuente"]) for x in nuevas}
+        todo = [x for x in viejas if (x["fecha"], x["fuente"]) not in hechos] + nuevas
+        todo.sort(key=lambda x: (x["fecha"], x["fuente"]))
+        self._subir(pa.Table.from_pylist(todo), clave)
+        for d in sorted({x["fecha"] for x in nuevas}):
+            rj = self.tmp / "calidad.json"
+            rj.write_text(json.dumps([{**x, "fecha": x["fecha"].isoformat()} for x in nuevas if x["fecha"] == d], ensure_ascii=False, indent=1), encoding="utf-8")
+            self.alm.subir(rj, f"{self.cat}calidad/fecha={d.isoformat()}.json", "application/json")
+        for x in nuevas:
+            if x["alerta"]:
+                aviso = f"AVISO calidad {x['fecha']} {x['fuente']}: {x['capturas']}/{x['esperadas']} capturas, mayor hueco {x['mayor_hueco_min']} min"
+                self.hecho.append(aviso); log(aviso)
+
+    # ---------- catálogo ----------
+    def catalogo(self, dims: dict) -> None:
+        disponibles = defaultdict(lambda: {"dias": 0, "bytes": 0, "desde": None, "hasta": None})
+        for k, tam in self.alm.listar(self.base).items():
+            m = re.match(re.escape(self.base) + r"([^/]+)/(?:fecha=(\d{4}-\d{2}-\d{2})/)?", k)
+            if not m:
+                continue
+            x = disponibles[m.group(1) if m.group(2) else "dim/" + k.rsplit("/", 1)[1][:-8]]
+            x["bytes"] += tam
+            if m.group(2):
+                x["dias"] += 1; x["desde"] = min(x["desde"] or m.group(2), m.group(2)); x["hasta"] = max(x["hasta"] or m.group(2), m.group(2))
+        tablas = {}
+        for nom, info in CATALOGO.items():
+            tablas[nom] = {**info, "ruta": f"s3://{BUCKET}/{self.base}{nom}/" + ("" if nom.startswith("dim/") else "fecha=AAAA-MM-DD/parte.parquet"),
+                           "disponible": disponibles.get(nom)}
+        doc = {"actualizado": datetime.now(timezone.utc).replace(microsecond=0).isoformat(), "zona_horaria": "t en UTC; t_local en hora de Barcelona",
+               "rejilla": "15 minutos (t = inicio del cuarto de hora)", "capas": CAPAS, "tablas": tablas}
+        rj = self.tmp / "tablas.json"
+        rj.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+        self.alm.subir(rj, self.cat + "tablas.json", "application/json")
+        md = [f"# Datos de Lumiose Planner (bucket R2 `{BUCKET}`)", "", "Generado cada noche por `pipeline/compactar_nube.py`. No editar a mano.", ""]
+        for capa, txt in CAPAS.items():
+            md.append(f"- **{capa}**: {txt}")
+        md += ["", "## Cómo leerlo (DuckDB)", "```sql", "INSTALL httpfs; LOAD httpfs;",
+               "CREATE SECRET r2 (TYPE r2, KEY_ID '…', SECRET '…', ACCOUNT_ID '" + CUENTA + "');",
+               f"SELECT * FROM read_parquet('r2://{BUCKET}/{self.base}entreno_bicing/*/*.parquet', hive_partitioning = true) LIMIT 10;", "```", ""]
+        for nom, t in tablas.items():
+            dsp = t.get("disponible") or {}
+            md += [f"## {nom}", t["descripcion"], "", f"- Fuente: {t['fuente']}", f"- Clave: {t.get('clave', '—')}",
+                   f"- Disponible: {dsp.get('dias', 0)} días ({dsp.get('desde')} → {dsp.get('hasta')})" if dsp.get("dias") else "- Se rehace cada noche",
+                   "", "| columna | qué es |", "|---|---|"] + [f"| `{c}` | {d} |" for c, d in t["columnas"].items()] + [""]
+        rm = self.tmp / "LEEME.md"
+        rm.write_text("\n".join(md), encoding="utf-8")
+        self.alm.subir(rm, self.cat + "LEEME.md", "text/markdown")
+        self.hecho.append(f"catálogo: {len(tablas)} tablas"); log(self.hecho[-1])
+
+
+CAPAS = {"bronze/": "cada captura tal cual llega del Worker (se vacía cada noche al pasar a silver)",
+         "silver/": "una tabla por fuente y periodo (día → semana → mes → año → década) + las respuestas originales comprimidas",
+         "gold/": "tablas listas para análisis e IA: rejilla de 15 min, referencias y tablas de entrenamiento (se pueden rehacer desde silver)",
+         "catalogo/": "este catálogo y el parte de calidad diario"}
+_T = {"t": "inicio del cuarto de hora (UTC)", "t_local": "inicio del cuarto de hora en hora de Barcelona"}
+CATALOGO = {
+    "bicing_15min": {"descripcion": "Estado de cada estación de Bicing cada 15 minutos (de lecturas cada minuto).", "fuente": "Bicing (GBFS vía citybik.es)",
+                     "clave": "estacion_id + t", "columnas": {"estacion_id": "id de la estación", **_T, "bicis": "bicis disponibles al final del cuarto de hora",
+                     "mecanicas": "de ellas, mecánicas", "electricas": "de ellas, eléctricas", "anclajes_libres": "anclajes libres al final",
+                     "bicis_media": "media de bicis en el cuarto de hora", "cogidas": "bicis que salieron (bajadas del contador; incluye camiones de reparto)",
+                     "dejadas": "bicis que llegaron (subidas del contador)", "capacidad": "anclajes en servicio (bicis + anclajes libres; el feed no publica la capacidad)", "ocupacion": "bicis / capacidad",
+                     "activa": "la estación funcionaba", "lecturas": "lecturas usadas (15 = todas)"}},
+    "trafico_15min": {"descripcion": "Estado del tráfico por tramo municipal cada 15 minutos.", "fuente": "Open Data BCN (estat del trànsit), CC BY 4.0",
+                      "clave": "tramo_id + t", "columnas": {"tramo_id": "tramo municipal (ver dim/tramos_trafico)", **_T,
+                      "estado": "0 sin datos · 1 muy fluido · 2 fluido · 3 denso · 4 muy denso · 5 congestión · 6 cortado", "estado_max": "peor estado en el cuarto de hora",
+                      "previsto": "estado previsto por el Ayuntamiento a 15 min", "lecturas": "lecturas usadas"}},
+    "tiempo_15min": {"descripcion": "Tiempo en Barcelona cada 15 minutos (siempre 96 filas al día; se usa la última lectura).", "fuente": "Open-Meteo",
+                     "clave": "t", "columnas": {**_T, "temperatura": "°C", "sensacion": "°C", "humedad": "%", "precipitacion_mm": "mm", "lluvia_mm": "mm",
+                     "codigo": "código WMO", "nubes": "%", "viento_kmh": "km/h", "viento_dir": "grados (de dónde viene)", "es_dia": "hay luz de día",
+                     "llueve": "precipitación > 0", "edad_dato_min": "minutos desde la lectura usada"}},
+    "incidencias": {"descripcion": "Incidencias de tráfico vistas cada día (una fila por incidencia y día).", "fuente": "Ajuntament (avisos, CC BY 4.0) y Servei Català de Trànsit (DATEX II)",
+                    "clave": "fuente + id + día", "columnas": {"fuente": "Ajuntament o SCT", "id": "texto (Ajuntament) o id DATEX (SCT)", "inicio_visto": "primera captura (UTC)",
+                    "fin_visto": "última captura (UTC)", "capturas": "veces vista", "tipo": "causa (obras, accidente, manifestación…) o tipo DATEX", "efecto": "cortado/restricciones o subtipo DATEX",
+                    "via": "calle o carretera", "sentido": "sentido", "texto": "texto original o municipio", "lat": "latitud (SCT)", "lon": "longitud (SCT)", "en_barcelona": "dentro de Barcelona y alrededores"}},
+    "entreno_bicing": {"descripcion": "Tabla de entrenamiento: bicis en cada estación dentro de 30 minutos, con el pasado reciente, la hora, el calendario y el tiempo.",
+                       "fuente": "gold/bicing_15min + tiempo_15min + dim/calendario", "clave": "estacion_id + t",
+                       "columnas": {"estacion_id": "estación", **_T, "bicis": "bicis ahora", "capacidad": "anclajes", "ocupacion": "bicis / capacidad", "cogidas": "salidas en el cuarto de hora",
+                       "dejadas": "llegadas en el cuarto de hora", "bicis_hace_15min": "bicis hace 15 min", "bicis_hace_30min": "hace 30 min", "bicis_hace_60min": "hace 60 min",
+                       "objetivo_bicis_30min": "LO QUE HAY QUE PREDECIR: bicis dentro de 30 min", "hora": "hora local decimal", "dia_semana": "1 lunes … 7 domingo",
+                       "laborable": "día laborable", "festivo": "festivo oficial o local", "temperatura": "°C", "precipitacion_mm": "mm", "codigo_tiempo": "código WMO"}},
+    "entreno_trafico": {"descripcion": "Tabla de entrenamiento: estado de cada tramo dentro de 30 minutos, con el pasado reciente, la hora, el calendario y el tiempo.",
+                        "fuente": "gold/trafico_15min + tiempo_15min + dim/calendario", "clave": "tramo_id + t",
+                        "columnas": {"tramo_id": "tramo", **_T, "estado": "estado ahora (0–6)", "previsto": "previsión municipal", "estado_hace_15min": "hace 15 min",
+                        "estado_hace_30min": "hace 30 min", "estado_hace_60min": "hace 60 min", "objetivo_estado_30min": "LO QUE HAY QUE PREDECIR: estado dentro de 30 min",
+                        "hora": "hora local decimal", "dia_semana": "1 lunes … 7 domingo", "laborable": "día laborable", "festivo": "festivo", "temperatura": "°C",
+                        "precipitacion_mm": "mm", "codigo_tiempo": "código WMO"}},
+    "dim/calendario": {"descripcion": "Un día por fila: día de la semana, festivos oficiales de Cataluña y locales de Barcelona, horario de verano.",
+                       "fuente": "Generalitat de Catalunya (datos abiertos: calendario laboral y festivos locales)", "clave": "fecha",
+                       "columnas": {"fecha": "día", "dia_semana": "1 lunes … 7 domingo", "fin_de_semana": "sábado o domingo", "festivo": "festivo", "tipo_festivo": "oficial o local",
+                                    "laborable": "ni fin de semana ni festivo", "horas_del_dia": "23/24/25 (cambios de hora)", "horario_verano": "horario de verano"}},
+    "dim/estaciones_bicing": {"descripcion": "Estaciones de Bicing: nombre, posición, capacidad y barrio.", "fuente": "Bicing (station_information) + barrios de Open Data BCN",
+                              "clave": "estacion_id", "columnas": {"estacion_id": "id", "nombre": "nombre", "lat": "latitud", "lon": "longitud", "capacidad": "anclajes",
+                              "barrio": "barrio", "distrito": "distrito", "x": "metros este (coordenadas del visor)", "z": "metros sur (coordenadas del visor)"}},
+    "dim/tramos_trafico": {"descripcion": "Tramos de tráfico municipales: descripción, barrio y longitud.", "fuente": "Open Data BCN (relació de trams)",
+                           "clave": "tramo_id", "columnas": {"tramo_id": "id", "descripcion": "calle y extremos", "barrio": "barrio", "distrito": "distrito",
+                           "x": "metros este (centro)", "z": "metros sur (centro)", "longitud_m": "longitud"}},
+}
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--prueba", action="store_true", help="escribe en prueba/historico/ y no borra nada")
+    ap.add_argument("--prueba", action="store_true", help="escribe en prueba/ (silver, gold, catálogo) y no borra nada")
     ap.add_argument("--local", help="carpeta local en lugar de R2")
     ap.add_argument("--hoy", help="fecha de hoy AAAA-MM-DD (tests)")
     ap.add_argument("--resumen", default=str(RESUMEN), help="dónde dejar el resumen para la web ('' = no dejarlo)")
@@ -549,6 +1032,12 @@ def main() -> None:
     c = Compactador(alm, hoy, a.prueba)
     log(f"compactando (hoy = {hoy}{', modo prueba' if a.prueba else ''})")
     c.dias()
+    oro = Oro(c)
+    try:
+        oro.correr()                     # antes de agrupar: así lee los días recién hechos sin bajar meses enteros
+    except Exception as e:  # noqa: BLE001
+        c.errores.append(f"gold: {e}"); log("ERROR gold", e)
+    c.hecho += oro.hecho
     c.agrupar()
     resumen = c.cerrar()
     if a.resumen:

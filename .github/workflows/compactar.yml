@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       prueba:
-        description: "Modo prueba: escribe en prueba/historico/ y no borra nada"
+        description: "Modo prueba: escribe en prueba/ y no borra nada"
         type: boolean
         default: true
       hoy:
