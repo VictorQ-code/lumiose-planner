@@ -31,7 +31,7 @@ Proyecto de portfolio de big data e IA: Barcelona entera en 3D en el navegador (
 - Para medir: el panel del navegador visible; forzar el pintado con `readPixels` de 1 px (no `gl.finish`).
 
 ## Pendiente (detalle en CONTEXTO_COMPLETO §0.3–0.4)
-1. Base de datos para la IA: bronze → silver (`historico/`) → **gold** (tablas a 15 min, dimensiones, calendario) + catálogo y calidad diaria; consulta con DuckDB sobre Parquet en R2.
-2. Vigilar que la compactación programada corre sola (el 25/11 no corrió y se lanzó a mano).
+1. Comprobar la primera noche del flujo nuevo (bronze → `silver/` → `gold/` + `catalogo/`, hecho el 25/11): log de GitHub, `catalogo/LEEME.md` y `catalogo/calidad.parquet` en R2.
+2. Gold: retrasos de bus (iBus frente a horario) e incidencias por tramo en las tablas de entrenamiento.
 3. Informe del ordenador del hermano (lag): mirar `errores/` en R2.
 4. Incidencias del SCT en el mapa; luego calidad del aire, festivos, agenda.
