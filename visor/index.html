@@ -1095,15 +1095,18 @@ window.addEventListener('wheel',e=>{
   zoomGoal=THREE.MathUtils.clamp(base*Math.pow(0.9985,e.deltaY*(e.deltaMode===1?33:1)),controls.minZoom,controls.maxZoom);
   zoomNdc.set(e.clientX/innerWidth*2-1,-(e.clientY/innerHeight)*2+1);
 },{capture:true,passive:false});
-const zR=new THREE.Vector3(), zU=new THREE.Vector3();
+// El punto del SUELO bajo el cursor se queda quieto: se mira antes y después del zoom y la vista se mueve solo en
+// horizontal. (Antes se movía «hacia arriba de la pantalla», que con la vista inclinada también sube: con la rueda del
+// ratón el centro de la vista se iba despegando del suelo —hasta decenas de km— y coches e incidencias desaparecían.)
+const zG0=new THREE.Vector3(), zG1=new THREE.Vector3();
 function zoomStep(){
   if(zoomGoal===null) return;
   const z0=cam.zoom, z1=Math.abs(zoomGoal-z0)<z0*0.002 ? zoomGoal : z0+(zoomGoal-z0)*0.28;
-  zR.set(1,0,0).applyQuaternion(cam.quaternion); zU.set(0,1,0).applyQuaternion(cam.quaternion);
-  const k=(1/z0-1/z1);
-  const shift=zR.multiplyScalar(zoomNdc.x*(cam.right-cam.left)/2*k).add(zU.multiplyScalar(zoomNdc.y*(cam.top-cam.bottom)/2*k));
-  cam.position.add(shift); controls.target.add(shift);
-  cam.zoom=z1; cam.updateProjectionMatrix(); lastMove=performance.now(); dirty=true;
+  const a=groundAt(zoomNdc.x,zoomNdc.y,zG0);
+  cam.zoom=z1; cam.updateProjectionMatrix(); cam.updateMatrixWorld();
+  const b=a&&groundAt(zoomNdc.x,zoomNdc.y,zG1);
+  if(a&&b){ const dx=zG0.x-zG1.x, dz=zG0.z-zG1.z; cam.position.x+=dx; cam.position.z+=dz; controls.target.x+=dx; controls.target.z+=dz; }
+  lastMove=performance.now(); dirty=true;
   if(z1===zoomGoal) zoomGoal=null;
 }
 
@@ -1122,6 +1125,8 @@ function camBuena(){ const p=cam.position, t=controls.target;
   return Number.isFinite(cam.zoom)&&cam.zoom>0&&Number.isFinite(p.x+p.y+p.z)&&Number.isFinite(t.x+t.y+t.z)&&Number.isFinite(cam.quaternion.w); }
 function camVolver(){ cam.zoom=camOK.zoom; cam.position.copy(camOK.pos); controls.target.copy(camOK.tgt); cam.quaternion.copy(camOK.q); cam.updateProjectionMatrix(); }
 function camGuard(){
+  // el centro de la vista siempre en el suelo (si algo lo despega, se baja con la cámara: la vista no cambia de forma)
+  if(Number.isFinite(controls.target.y)&&Math.abs(controls.target.y)>0.5){ cam.position.y-=controls.target.y; controls.target.y=0; dirty=true; }
   if(camBuena()){ camOK.zoom=cam.zoom; camOK.pos.copy(cam.position); camOK.tgt.copy(controls.target); camOK.q.copy(cam.quaternion); return; }
   console.warn('Lumiose Planner: cámara recuperada tras un gesto raro');
   zoomGoal=null; fly=null; camVolver();
