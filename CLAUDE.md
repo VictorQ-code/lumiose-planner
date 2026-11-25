@@ -32,6 +32,6 @@ Proyecto de portfolio de big data e IA: Barcelona entera en 3D en el navegador (
 
 ## Pendiente (detalle en CONTEXTO_COMPLETO §0.3–0.4)
 1. Comprobar la primera noche del flujo nuevo (bronze → `silver/` → `gold/` + `catalogo/`, hecho el 25/11): log de GitHub, `catalogo/LEEME.md` y `catalogo/calidad.parquet` en R2.
-2. Gold: incidencias por tramo en las tablas de entrenamiento (retrasos de bus hechos el 25/11: `bus_llegadas`, `bus_retrasos_15min`).
+2. Gold listo para entrenar (25/11): retrasos de bus (`bus_llegadas`, `bus_retrasos_15min`, `entreno_bus`) e incidencias situadas (`pipeline/situar.py`) con rasgos `inc_*` en todas las `entreno_*`. Falta acumular días.
 3. Informe del ordenador del hermano (lag): mirar `errores/` en R2.
 4. Incidencias del SCT en el mapa; luego calidad del aire, festivos, agenda.

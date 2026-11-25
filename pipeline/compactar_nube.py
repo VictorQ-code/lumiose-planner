@@ -813,6 +813,34 @@ class Oro:
         cols["edad_dato_min"] = pa.array(np.where(ok, (rejilla + Q - s[i]) / 60, np.nan).astype("float32"))   # cuánto hace de la lectura usada
         return pa.table(cols)
 
+    # ---------- situar incidencias (texto del Ayuntamiento o coordenadas del SCT) y el tramo de tráfico más cercano ----------
+    def _geo(self):
+        if not hasattr(self, "_seg"):
+            sys.path.insert(0, str(ROOT / "pipeline"))
+            try:
+                from situar import Situador                        # noqa: E402
+                self._sit = Situador()
+            except Exception as e:  # noqa: BLE001
+                self._sit = None; self.c.errores.append(f"situar incidencias: {e}")
+            segs = []
+            if TRAMOS.exists():
+                for tid, _, c in json.loads(TRAMOS.read_text(encoding="utf-8"))["tramos"]:
+                    segs += [(int(tid), c[i], c[i + 1], c[i + 2], c[i + 3]) for i in range(0, len(c) - 2, 2)]
+            self._seg = np.array(segs, dtype=float).reshape(-1, 5)
+        return self._sit
+
+    def tramo_cercano(self, x: float, z: float, maximo: float) -> tuple[int | None, float | None]:
+        self._geo()
+        s = self._seg
+        if not len(s) or x is None:
+            return None, None
+        ax, az, vx, vz = s[:, 1], s[:, 2], s[:, 3] - s[:, 1], s[:, 4] - s[:, 2]
+        l2 = np.maximum(vx * vx + vz * vz, 1e-9)
+        u = np.clip(((x - ax) * vx + (z - az) * vz) / l2, 0, 1)
+        dd = np.hypot(ax + u * vx - x, az + u * vz - z)
+        i = int(np.argmin(dd))
+        return (int(s[i, 0]), float(dd[i])) if dd[i] <= maximo else (None, None)
+
     def incidencias(self, d: date) -> pa.Table | None:
         s0, s1 = _dia_utc(d)
         filas = []
@@ -825,7 +853,7 @@ class Oro:
                 ts = sorted(r["ts"] for r in rs)
                 filas.append({"fuente": "Ajuntament", "id": txt[:120], "inicio_visto": ts[0], "fin_visto": ts[-1], "capturas": len(ts),
                               "tipo": rs[0]["causa"], "efecto": rs[0]["efecto"], "via": rs[0]["via"], "sentido": rs[0]["sentido"], "texto": txt,
-                              "lat": None, "lon": None, "en_barcelona": True})
+                              "lat": None, "lon": None, "en_barcelona": True, "corte": rs[0]["efecto"] == "cortado"})
         t = self.silver("incidencias_sct", s0, s1)
         if t is not None and t.num_rows:
             g = defaultdict(list)
@@ -833,14 +861,79 @@ class Oro:
                 g[r["id"]].append(r)
             for iid, rs in g.items():
                 ts = sorted(r["ts"] for r in rs); r = rs[-1]
+                try:
+                    desde = datetime.fromisoformat(r["desde"]).astimezone(timezone.utc) if r["desde"] else None
+                except ValueError:
+                    desde = None
                 filas.append({"fuente": "SCT", "id": iid, "inicio_visto": ts[0], "fin_visto": ts[-1], "capturas": len(ts), "tipo": r["tipo"],
                               "efecto": r["subtipo"], "via": r["carretera"], "sentido": r["sentido"], "texto": r["lugar"],
-                              "lat": r["lat"], "lon": r["lon"], "en_barcelona": bool(r["bcn"])})
+                              "lat": r["lat"], "lon": r["lon"], "en_barcelona": bool(r["bcn"]), "desde": desde,
+                              "corte": bool(re.search(r"clos|block|barri", f"{r['tipo']} {r['subtipo']}", re.I))})
         if not filas:
             return None
+        # dónde: el Ayuntamiento con el texto (calle + cruce, como el visor); el SCT con sus coordenadas
+        sit = self._geo()
+        from geo import a_local                                    # noqa: E402
+        for f in filas:
+            f["x"] = f["z"] = f["tramo_id"] = f["situada"] = None
+            if f["fuente"] == "Ajuntament" and sit is not None:
+                r = sit.situar(f["texto"])
+                if r:
+                    f["x"], f["z"], f["situada"] = r["x"], r["z"], r["como"]
+                    f["tramo_id"] = r["tramo_trafico"] if r["tramo_trafico"] is not None and r["tramo_trafico"] >= 0 else self.tramo_cercano(r["x"], r["z"], 60)[0]
+            elif f["fuente"] == "SCT" and f["lat"] is not None and f["en_barcelona"]:
+                f["x"], f["z"] = a_local(f["lon"], f["lat"]); f["situada"] = "coordenadas"
+                f["tramo_id"] = self.tramo_cercano(f["x"], f["z"], 100)[0]
+        # desde cuándo existe: lo que diga el SCT o la primera vez que se vio (se arrastra del día anterior)
+        antes = self._gold("incidencias", d - timedelta(days=1))
+        prev = {}
+        if antes is not None and "primera_vez" in antes.column_names:
+            prev = {(a, b): c for a, b, c in zip(antes["fuente"].to_pylist(), antes["id"].to_pylist(), antes["primera_vez"].to_pylist())}
+        for f in filas:
+            f["primera_vez"] = min(x for x in (f["inicio_visto"], prev.get((f["fuente"], f["id"])), f.get("desde")) if x is not None)
         return pa.Table.from_pylist(filas, schema=pa.schema([("fuente", pa.string()), ("id", pa.string()), ("inicio_visto", TS), ("fin_visto", TS),
-            ("capturas", pa.int32()), ("tipo", pa.string()), ("efecto", pa.string()), ("via", pa.string()), ("sentido", pa.string()), ("texto", pa.string()),
-            ("lat", pa.float32()), ("lon", pa.float32()), ("en_barcelona", pa.bool_())]))
+            ("capturas", pa.int32()), ("primera_vez", TS), ("tipo", pa.string()), ("efecto", pa.string()), ("corte", pa.bool_()), ("via", pa.string()),
+            ("sentido", pa.string()), ("texto", pa.string()), ("lat", pa.float32()), ("lon", pa.float32()), ("en_barcelona", pa.bool_()),
+            ("x", pa.float32()), ("z", pa.float32()), ("tramo_id", pa.int32()), ("situada", pa.string())]))
+
+    def _inc_dia(self, d: date) -> dict | None:
+        """Incidencias situadas del día d (Barcelona y alrededores), listas para medir distancias."""
+        t = self._gold("incidencias", d)
+        if t is None or "x" not in t.column_names:
+            return None
+        rs = [r for r in t.to_pylist() if r["x"] is not None and r["en_barcelona"]]
+        if not rs:
+            return None
+        seg = lambda c: np.array([r[c].timestamp() for r in rs], dtype=float)   # noqa: E731
+        return {"x": np.array([r["x"] for r in rs], dtype=float), "z": np.array([r["z"] for r in rs], dtype=float),
+                "ini": seg("inicio_visto") - 300, "fin": seg("fin_visto") + 300, "prim": seg("primera_vez"),       # capturas cada 5 min: ±5 min
+                "corte": np.array([bool(r["corte"]) for r in rs]), "tramo": np.array([r["tramo_id"] if r["tramo_id"] is not None else -1 for r in rs]),
+                "tipo": [r["tipo"] for r in rs]}
+
+    @staticmethod
+    def rasgos_inc(inc: dict | None, xs: np.ndarray, zs: np.ndarray, s: np.ndarray, tramos: np.ndarray | None = None) -> dict:
+        """Para cada fila (sitio xs,zs y cuarto de hora s): incidencias activas cerca y, si es un tramo, en el propio tramo."""
+        n = len(s)
+        cols = {"inc_dist_m": np.full(n, np.nan, dtype="float32"), "inc_300m": np.zeros(n, "int8"), "inc_1km": np.zeros(n, "int8"),
+                "inc_cortes_1km": np.zeros(n, "int8"), "inc_tipo_cercana": [None] * n, "inc_horas_cercana": np.full(n, np.nan, dtype="float32")}
+        if tramos is not None:
+            cols["inc_en_tramo"] = np.zeros(n, bool); cols["inc_corte_en_tramo"] = np.zeros(n, bool)
+        if inc is not None and n:
+            act = (inc["ini"][None, :] <= s[:, None] + Q) & (inc["fin"][None, :] >= s[:, None])
+            D = np.hypot(xs[:, None] - inc["x"][None, :], zs[:, None] - inc["z"][None, :])
+            D = np.where(act & ~np.isnan(D), D, np.inf)
+            j = np.argmin(D, axis=1); dmin = D[np.arange(n), j]
+            cerca = dmin <= 1000
+            cols["inc_dist_m"] = np.where(dmin <= 5000, dmin, np.nan).astype("float32")
+            cols["inc_300m"] = np.minimum((D <= 300).sum(1), 127).astype("int8")
+            cols["inc_1km"] = np.minimum((D <= 1000).sum(1), 127).astype("int8")
+            cols["inc_cortes_1km"] = np.minimum(((D <= 1000) & inc["corte"][None, :]).sum(1), 127).astype("int8")
+            cols["inc_tipo_cercana"] = [inc["tipo"][k] if c else None for k, c in zip(j, cerca)]
+            cols["inc_horas_cercana"] = np.where(cerca, (s - inc["prim"][j]) / 3600, np.nan).astype("float32")
+            if tramos is not None:
+                en = act & (inc["tramo"][None, :] == tramos[:, None])
+                cols["inc_en_tramo"] = en.any(1); cols["inc_corte_en_tramo"] = (en & inc["corte"][None, :]).any(1)
+        return {k: pa.array(v, type=pa.string()) if k == "inc_tipo_cercana" else pa.array(v) for k, v in cols.items()}
 
     # ---------- autobuses: retraso real (previsión iBus) frente al horario GTFS ----------
     def horario_bus(self) -> dict | None:
@@ -1000,8 +1093,96 @@ class Oro:
             w = [tm.get(int(x), (None, None, None)) for x in s0_]
             cols["temperatura"] = pa.array([a for a, _, _ in w], type=pa.float32()); cols["precipitacion_mm"] = pa.array([b for _, b, _ in w], type=pa.float32())
             cols["codigo_tiempo"] = pa.array([c for _, _, c in w], type=pa.int16())
+        # incidencias activas en ese cuarto de hora: en el propio tramo (tráfico) y cerca (distancia, número, cortes, tipo, antigüedad)
+        ref = {"trafico_15min": ("tramos_trafico", "tramo_id"), "bicing_15min": ("estaciones_bicing", "estacion_id")}.get(tabla)
+        if ref and ref[0] in dims:
+            pos = {str(a): (x, z) for a, x, z in zip(dims[ref[0]][ref[1]].to_pylist(), dims[ref[0]]["x"].to_pylist(), dims[ref[0]]["z"].to_pylist())}
+            xz = np.array([pos.get(a, (None, None)) for a in k0], dtype=float).reshape(-1, 2)
+            tramos = k0.astype("int64") if tabla == "trafico_15min" else None
+            cols.update(self.rasgos_inc(self._inc_dia(d), xz[:, 0], xz[:, 1], s0_.astype(float), tramos))
         conocido = ~np.isnan(cols[f"objetivo_{valor}_30min"])                    # filas cuyo futuro a +30 min se conoce
         return pa.table(cols).filter(pa.array(conocido))
+
+    def entreno_bus(self, d: date, dims: dict) -> pa.Table | None:
+        """Tabla de entrenamiento: retraso de un bus en una parada, con lo que se sabía en el momento de la previsión
+        (cuando iBus lo anunció): retrasos recientes de su línea, tráfico de alrededor, incidencias, hora, calendario y tiempo."""
+        hoy = self._gold("bus_llegadas", d)
+        if hoy is None or not hoy.num_rows:
+            return None
+        partes = [x for x in (self._gold("bus_llegadas", d - timedelta(days=1)), hoy) if x is not None]
+        cols_h = ["linea", "sentido", "llegada", "retraso_s", "anticipacion_s"]
+        todo = pa.concat_tables([x.select(cols_h) for x in partes])
+        # historial de cada línea y sentido (solo previsiones a 0–15 min de la llegada: las fiables)
+        hist = defaultdict(lambda: ([], []))
+        for l, se, ll, r, a in zip(*(todo[c].to_pylist() for c in cols_h)):
+            if r is not None and a is not None and 0 <= a <= 900:
+                hist[(l, se)][0].append(ll.timestamp()); hist[(l, se)][1].append(r)
+        hist = {k: (np.array(v[0]), np.array(v[1], dtype=float)) for k, v in hist.items()}
+        for k, (a, b) in hist.items():
+            o = np.argsort(a); hist[k] = (a[o], b[o])
+        rs = [r for r in hoy.to_pylist() if r["retraso_s"] is not None and 0 <= r["anticipacion_s"] <= 900]
+        if not rs:
+            return None
+        n = len(rs)
+        cap = np.array([r["llegada"].timestamp() - r["anticipacion_s"] for r in rs])          # cuándo se hizo la previsión
+        med = np.full(n, np.nan, "float32"); cnt = np.zeros(n, "int16"); ult = np.full(n, np.nan, "float32"); hace = np.full(n, np.nan, "float32")
+        for i, r in enumerate(rs):
+            h = hist.get((r["linea"], r["sentido"]))
+            if h is None:
+                continue
+            a, b = np.searchsorted(h[0], cap[i] - 3600), np.searchsorted(h[0], cap[i])        # pasos ya ocurridos en la última hora
+            if b > a:
+                med[i] = np.median(h[1][a:b]); cnt[i] = b - a; ult[i] = h[1][b - 1]; hace[i] = (cap[i] - h[0][b - 1]) / 60
+        # tráfico alrededor de la parada en el último cuarto de hora ya cerrado
+        q = (cap // Q) * Q - Q
+        traf = self._gold("trafico_15min", d)
+        est = {}
+        if traf is not None:
+            est = {(int(a), int(b)): int(c) for a, b, c in zip(traf["tramo_id"].to_numpy(), _segundos(traf["t"]), traf["estado"].to_numpy())}
+        pos = {}
+        if "paradas_bus" in dims:
+            pos = {a: (x, z) for a, x, z in zip(*(dims["paradas_bus"][c].to_pylist() for c in ("parada", "x", "z")))}
+        tt = dims.get("tramos_trafico")
+        tx = np.array(tt["x"].to_pylist(), dtype=float) if tt is not None else np.zeros(0)
+        tz = np.array(tt["z"].to_pylist(), dtype=float) if tt is not None else np.zeros(0)
+        tid = np.array(tt["tramo_id"].to_pylist()) if tt is not None else np.zeros(0)
+        cerca: dict[str, tuple] = {}
+        for p in {r["parada"] for r in rs}:
+            x, z = pos.get(p, (None, None))
+            if x is None:
+                cerca[p] = (None, []); continue
+            cerca[p] = (self.tramo_cercano(x, z, 150)[0], list(tid[np.hypot(tx - x, tz - z) <= 500]) if len(tx) else [])
+        e_cerca = np.full(n, np.nan, "float32"); e_500 = np.full(n, np.nan, "float32")
+        for i, r in enumerate(rs):
+            t1, zona = cerca[r["parada"]]
+            v = est.get((t1, int(q[i]))) if t1 is not None else None
+            if v:                                                   # 0 = sin datos
+                e_cerca[i] = v
+            vs = [est.get((int(t), int(q[i]))) for t in zona]
+            vs = [x for x in vs if x]
+            if vs:
+                e_500[i] = float(np.mean(vs))
+        cols = {c: hoy.schema.field(c).type for c in ("linea", "sentido", "parada", "id_bus", "t", "t_local", "llegada_local", "programada",
+                                                      "anticipacion_s", "intervalo_prog_s", "retraso_claro")}
+        cols = {c: pa.array([r[c] for r in rs], type=tp) for c, tp in cols.items()}
+        cols.update({"retraso_linea_60min_s": pa.array(med), "pasos_linea_60min": pa.array(cnt), "retraso_ultimo_linea_s": pa.array(ult),
+                     "min_desde_ultimo_linea": pa.array(hace), "trafico_estado_cerca": pa.array(e_cerca), "trafico_medio_500m": pa.array(e_500)})
+        loc = [datetime.fromtimestamp(x, MADRID) for x in cap]
+        cal = {r["fecha"]: r for r in dims["calendario"].to_pylist()} if "calendario" in dims else {}
+        cols["hora"] = pa.array([x.hour + x.minute / 60 for x in loc], type=pa.float32())
+        cols["dia_semana"] = pa.array([x.isoweekday() for x in loc], type=pa.int8())
+        cols["laborable"] = pa.array([bool(cal.get(x.date(), {}).get("laborable", x.isoweekday() < 6)) for x in loc])
+        cols["festivo"] = pa.array([bool(cal.get(x.date(), {}).get("festivo", False)) for x in loc])
+        tiempo = self._gold("tiempo_15min", d)
+        if tiempo is not None:
+            tm = {int(a): (b, c, e) for a, b, c, e in zip(_segundos(tiempo["t"]), tiempo["temperatura"].to_pylist(), tiempo["precipitacion_mm"].to_pylist(), tiempo["codigo"].to_pylist())}
+            w = [tm.get(int(x), (None, None, None)) for x in q]
+            cols["temperatura"] = pa.array([a for a, _, _ in w], type=pa.float32()); cols["precipitacion_mm"] = pa.array([b for _, b, _ in w], type=pa.float32())
+            cols["codigo_tiempo"] = pa.array([c for _, _, c in w], type=pa.int16())
+        xz = np.array([pos.get(r["parada"], (None, None)) for r in rs], dtype=float).reshape(-1, 2)
+        cols.update(self.rasgos_inc(self._inc_dia(d), xz[:, 0], xz[:, 1], q))
+        cols["objetivo_retraso_s"] = pa.array([r["retraso_s"] for r in rs], type=pa.int32())
+        return pa.table(cols)
 
     # ---------- parte de calidad de un día ----------
     def calidad(self, d: date) -> list[dict]:
@@ -1061,6 +1242,13 @@ class Oro:
                         self.hecho.append(f"gold {nom} {d}: {t.num_rows:,} filas"); log(self.hecho[-1])
                 except Exception as e:  # noqa: BLE001
                     self.c.errores.append(f"gold {nom} {d}: {e}"); log("ERROR gold", nom, d, e)
+            try:                                                    # el de bus no necesita el día siguiente (el objetivo es el propio paso)
+                t = self.entreno_bus(d, dims)
+                if t is not None and t.num_rows:
+                    self._subir(t, self._dia("entreno_bus", d))
+                    self.hecho.append(f"gold entreno_bus {d}: {t.num_rows:,} filas"); log(self.hecho[-1])
+            except Exception as e:  # noqa: BLE001
+                self.c.errores.append(f"gold entreno_bus {d}: {e}"); log("ERROR gold entreno_bus", d, e)
         self.guardar_calidad(cal_nuevas)
         self.catalogo(dims)
 
@@ -1144,7 +1332,10 @@ CATALOGO = {
     "incidencias": {"descripcion": "Incidencias de tráfico vistas cada día (una fila por incidencia y día).", "fuente": "Ajuntament (avisos, CC BY 4.0) y Servei Català de Trànsit (DATEX II)",
                     "clave": "fuente + id + día", "columnas": {"fuente": "Ajuntament o SCT", "id": "texto (Ajuntament) o id DATEX (SCT)", "inicio_visto": "primera captura (UTC)",
                     "fin_visto": "última captura (UTC)", "capturas": "veces vista", "tipo": "causa (obras, accidente, manifestación…) o tipo DATEX", "efecto": "cortado/restricciones o subtipo DATEX",
-                    "via": "calle o carretera", "sentido": "sentido", "texto": "texto original o municipio", "lat": "latitud (SCT)", "lon": "longitud (SCT)", "en_barcelona": "dentro de Barcelona y alrededores"}},
+                    "via": "calle o carretera", "sentido": "sentido", "texto": "texto original o municipio", "lat": "latitud (SCT)", "lon": "longitud (SCT)", "en_barcelona": "dentro de Barcelona y alrededores",
+                    "primera_vez": "desde cuándo existe (inicio del SCT o primera captura, arrastrada de días anteriores)", "corte": "corta la circulación",
+                    "x": "metros este (coordenadas del visor)", "z": "metros sur", "tramo_id": "tramo de tráfico afectado (ver dim/tramos_trafico)",
+                    "situada": "cómo se situó: cruce, entre dos cruces, solo la calle (texto del Ayuntamiento, como el visor) o coordenadas (SCT); vacío = no se sabe dónde"}},
     "bus_llegadas": {"descripcion": "Cada paso de autobús visto por iBus en las paradas de control (unas 470, cada una consultada cada ~40 min), "
                                     "con su hora programada y su retraso. El retraso es frente a la hora programada más cercana de esa línea en esa parada: "
                                     "en líneas muy frecuentes (TMB las regula por intervalo, no por horario) solo se puede medir hasta medio intervalo; mira `retraso_claro`.",
@@ -1176,13 +1367,33 @@ CATALOGO = {
                        "columnas": {"estacion_id": "estación", **_T, "bicis": "bicis ahora", "capacidad": "anclajes", "ocupacion": "bicis / capacidad", "cogidas": "salidas en el cuarto de hora",
                        "dejadas": "llegadas en el cuarto de hora", "bicis_hace_15min": "bicis hace 15 min", "bicis_hace_30min": "hace 30 min", "bicis_hace_60min": "hace 60 min",
                        "objetivo_bicis_30min": "LO QUE HAY QUE PREDECIR: bicis dentro de 30 min", "hora": "hora local decimal", "dia_semana": "1 lunes … 7 domingo",
-                       "laborable": "día laborable", "festivo": "festivo oficial o local", "temperatura": "°C", "precipitacion_mm": "mm", "codigo_tiempo": "código WMO"}},
+                       "laborable": "día laborable", "festivo": "festivo oficial o local", "temperatura": "°C", "precipitacion_mm": "mm", "codigo_tiempo": "código WMO", "inc_dist_m": "metros a la incidencia activa más cercana (vacío si no hay a menos de 5 km)",
+                       "inc_300m": "incidencias activas a menos de 300 m", "inc_1km": "a menos de 1 km", "inc_cortes_1km": "cortes de circulación a menos de 1 km",
+                       "inc_tipo_cercana": "tipo de la más cercana (a menos de 1 km)", "inc_horas_cercana": "horas que lleva la más cercana"}},
     "entreno_trafico": {"descripcion": "Tabla de entrenamiento: estado de cada tramo dentro de 30 minutos, con el pasado reciente, la hora, el calendario y el tiempo.",
                         "fuente": "gold/trafico_15min + tiempo_15min + dim/calendario", "clave": "tramo_id + t",
                         "columnas": {"tramo_id": "tramo", **_T, "estado": "estado ahora (0–6)", "previsto": "previsión municipal", "estado_hace_15min": "hace 15 min",
                         "estado_hace_30min": "hace 30 min", "estado_hace_60min": "hace 60 min", "objetivo_estado_30min": "LO QUE HAY QUE PREDECIR: estado dentro de 30 min",
                         "hora": "hora local decimal", "dia_semana": "1 lunes … 7 domingo", "laborable": "día laborable", "festivo": "festivo", "temperatura": "°C",
-                        "precipitacion_mm": "mm", "codigo_tiempo": "código WMO"}},
+                        "precipitacion_mm": "mm", "codigo_tiempo": "código WMO", "inc_dist_m": "metros a la incidencia activa más cercana (vacío si no hay a menos de 5 km)",
+                       "inc_300m": "incidencias activas a menos de 300 m", "inc_1km": "a menos de 1 km", "inc_cortes_1km": "cortes de circulación a menos de 1 km",
+                       "inc_tipo_cercana": "tipo de la más cercana (a menos de 1 km)", "inc_horas_cercana": "horas que lleva la más cercana",
+                        "inc_en_tramo": "hay una incidencia activa en este tramo", "inc_corte_en_tramo": "y corta la circulación"}},
+    "entreno_bus": {"descripcion": "Tabla de entrenamiento: retraso de un bus al llegar a una parada, con lo que se sabía cuando iBus hizo la previsión "
+                                   "(retrasos de la última hora en su línea, tráfico alrededor en el último cuarto de hora cerrado, incidencias, hora, calendario y tiempo). "
+                                   "Solo pasos con previsión a 0–15 min de la llegada.",
+                    "fuente": "gold/bus_llegadas + trafico_15min + incidencias + tiempo_15min + dim/calendario", "clave": "parada + linea + sentido + llegada_local",
+                    "columnas": {"linea": "línea", "sentido": "1 ida · 2 vuelta", "parada": "parada (ver dim/paradas_bus)", "id_bus": "bus", **_T,
+                                 "llegada_local": "llegada prevista (hora de Barcelona)", "programada": "hora programada (UTC)", "anticipacion_s": "segundos entre la previsión y la llegada",
+                                 "intervalo_prog_s": "segundos entre buses según horario", "retraso_claro": "retraso menor que ¼ del intervalo (sin confusión de bus)",
+                                 "retraso_linea_60min_s": "mediana del retraso de la línea y sentido en la última hora", "pasos_linea_60min": "pasos medidos en esa hora",
+                                 "retraso_ultimo_linea_s": "último retraso medido de la línea", "min_desde_ultimo_linea": "minutos desde ese último paso",
+                                 "trafico_estado_cerca": "estado del tramo de tráfico a menos de 150 m (1–6)", "trafico_medio_500m": "estado medio de los tramos a menos de 500 m",
+                                 "hora": "hora local decimal", "dia_semana": "1 lunes … 7 domingo", "laborable": "día laborable", "festivo": "festivo",
+                                 "temperatura": "°C", "precipitacion_mm": "mm", "codigo_tiempo": "código WMO", "inc_dist_m": "metros a la incidencia activa más cercana (vacío si no hay a menos de 5 km)",
+                       "inc_300m": "incidencias activas a menos de 300 m", "inc_1km": "a menos de 1 km", "inc_cortes_1km": "cortes de circulación a menos de 1 km",
+                       "inc_tipo_cercana": "tipo de la más cercana (a menos de 1 km)", "inc_horas_cercana": "horas que lleva la más cercana",
+                                 "objetivo_retraso_s": "LO QUE HAY QUE PREDECIR: retraso del bus en esta parada (s)"}},
     "dim/calendario": {"descripcion": "Un día por fila: día de la semana, festivos oficiales de Cataluña y locales de Barcelona, horario de verano.",
                        "fuente": "Generalitat de Catalunya (datos abiertos: calendario laboral y festivos locales)", "clave": "fecha",
                        "columnas": {"fecha": "día", "dia_semana": "1 lunes … 7 domingo", "fin_de_semana": "sábado o domingo", "festivo": "festivo", "tipo_festivo": "oficial o local",
