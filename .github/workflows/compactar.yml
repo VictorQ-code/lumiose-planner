@@ -42,7 +42,7 @@ jobs:
           python-version: "3.12"
 
       - name: Instalar dependencias
-        run: pip install "pyarrow>=14" "boto3>=1.34" "requests>=2.31"
+        run: pip install "pyarrow>=14" "numpy>=1.26" "boto3>=1.34" "requests>=2.31"
 
       - name: Compactar
         env:
