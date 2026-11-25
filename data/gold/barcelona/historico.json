@@ -1,0 +1,63 @@
+{
+ "actualizado": "2026-11-25T06:17:53+00:00",
+ "prueba": false,
+ "bytes_historico": 2564486,
+ "bytes_capturas_sueltas": 104982617,
+ "capturas_sueltas": 928,
+ "fuentes": {
+  "bicing": {
+   "filas": 538890,
+   "bytes": 433955,
+   "desde": "2026-11-24T06:28:05+00:00",
+   "hasta": "2026-11-24T22:59:05+00:00"
+  },
+  "bicing_info": {
+   "filas": 1086,
+   "bytes": 30409,
+   "desde": "2026-11-24T12:00:05+00:00",
+   "hasta": "2026-11-24T18:00:05+00:00"
+  },
+  "trafico": {
+   "filas": 63308,
+   "bytes": 29767,
+   "desde": "2026-11-24T07:00:05+00:00",
+   "hasta": "2026-11-24T22:59:05+00:00"
+  },
+  "tiempo": {
+   "filas": 65,
+   "bytes": 4925,
+   "desde": "2026-11-24T06:30:05+00:00",
+   "hasta": "2026-11-24T22:45:05+00:00"
+  },
+  "bus": {
+   "filas": 31336,
+   "bytes": 206904,
+   "desde": "2026-11-24T13:14:05+00:00",
+   "hasta": "2026-11-24T22:58:05+00:00"
+  },
+  "incidencias_bcn": {
+   "filas": 154,
+   "bytes": 3132,
+   "desde": "2026-11-24T20:34:05+00:00",
+   "hasta": "2026-11-24T22:59:05+00:00"
+  },
+  "incidencias_sct": {
+   "filas": 6448,
+   "bytes": 11266,
+   "desde": "2026-11-24T20:33:05+00:00",
+   "hasta": "2026-11-24T22:55:05+00:00"
+  }
+ },
+ "ultima_ejecucion": {
+  "hecho": [
+   "día 2026-11-24 bicing: 992 capturas -> 538,890 filas (0.43 MB tabla + 1.47 MB crudo)",
+   "día 2026-11-24 bicing_info: 2 capturas -> 1,086 filas (0.03 MB tabla + 0.02 MB crudo)",
+   "día 2026-11-24 trafico: 119 capturas -> 63,308 filas (0.03 MB tabla + 0.03 MB crudo)",
+   "día 2026-11-24 tiempo: 65 capturas -> 65 filas (0.00 MB tabla + 0.00 MB crudo)",
+   "día 2026-11-24 bus: 293 capturas -> 31,336 filas (0.21 MB tabla + 0.29 MB crudo)",
+   "día 2026-11-24 incidencias_bcn: 26 capturas -> 154 filas (0.00 MB tabla + 0.00 MB crudo)",
+   "día 2026-11-24 incidencias_sct: 30 capturas -> 6,448 filas (0.01 MB tabla + 0.03 MB crudo)"
+  ],
+  "errores": []
+ }
+}
