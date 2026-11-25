@@ -582,6 +582,7 @@ Q = 900                                    # 15 minutos, en segundos
 ESPERADAS = {"bicing": 1440, "bicing_info": 4, "trafico": 288, "tiempo": 96, "bus": 720, "incidencias_bcn": 288, "incidencias_sct": 288}
 INDEX = ROOT / "data" / "gold" / "barcelona" / "index.json"
 TRAMOS = ROOT / "data" / "gold" / "barcelona" / "vivo" / "tramos.json"
+BUSES = ROOT / "data" / "gold" / "barcelona" / "vivo" / "buses.json"    # horario GTFS (TMB + NitBus) de pipeline/buses.py
 T_LOCAL = pa.timestamp("s")                # hora de Barcelona sin zona (para leerla a simple vista)
 
 
@@ -608,6 +609,11 @@ def _segundos(col) -> np.ndarray:
     return pc.cast(col, pa.timestamp("s", tz="UTC")).cast(pa.int64()).to_numpy(zero_copy_only=False)
 
 
+def _cod_parada(sid: str) -> str:
+    """Id de parada del GTFS -> código de TMB que usa iBus ("2.1314.683903" -> "1314")."""
+    return sid.split(".")[1] if sid.count(".") >= 1 else sid
+
+
 def _ultimos(clave: np.ndarray) -> np.ndarray:
     """Con 'clave' ordenada: índice de la última fila de cada grupo."""
     return np.flatnonzero(np.r_[clave[1:] != clave[:-1], True])
@@ -619,6 +625,7 @@ class Oro:
         self.base = c.raiz + "gold/"
         self.cat = c.raiz + "catalogo/"
         self.hecho: list[str] = []
+        self._buses = None
 
     # ---------- lectura de silver por fechas (del nivel que sea: día, semana, mes…) ----------
     def silver(self, fuente: str, s0: int, s1: int) -> pa.Table | None:
@@ -701,6 +708,18 @@ class Oro:
                 filas.append({"tramo_id": int(tid), "descripcion": desc, "barrio": nom, "distrito": dis, "x": c[k] if c else None, "z": c[k + 1] if c else None,
                               "longitud_m": float(sum(np.hypot(np.diff(c[0::2]), np.diff(c[1::2])))) if len(c) >= 4 else None})
             dims["tramos_trafico"] = pa.Table.from_pylist(filas)
+        # paradas y líneas de bus (del horario GTFS que usa el visor); parada = código de TMB, el mismo que da iBus
+        hb = self.horario_bus()
+        if hb:
+            filas = {}
+            for sid, (x, z, nom) in hb["paradas"].items():
+                cod = _cod_parada(sid)
+                if cod not in filas:
+                    b, dis = barrio(x, z)
+                    filas[cod] = {"parada": cod, "nombre": nom, "x": x, "z": z, "barrio": b, "distrito": dis}
+            dims["paradas_bus"] = pa.Table.from_pylist(sorted(filas.values(), key=lambda r: r["parada"]))
+            dims["lineas_bus"] = pa.Table.from_pylist([{"linea": l[0], "color": l[1], "nombre": l[2], "nocturna": l[0].startswith("N")}
+                                                       for l in hb["lineas"]])
         # calendario: festivos oficiales de Cataluña y locales de Barcelona (Generalitat, datos abiertos)
         fest = {}
         try:
@@ -823,6 +842,128 @@ class Oro:
             ("capturas", pa.int32()), ("tipo", pa.string()), ("efecto", pa.string()), ("via", pa.string()), ("sentido", pa.string()), ("texto", pa.string()),
             ("lat", pa.float32()), ("lon", pa.float32()), ("en_barcelona", pa.bool_())]))
 
+    # ---------- autobuses: retraso real (previsión iBus) frente al horario GTFS ----------
+    def horario_bus(self) -> dict | None:
+        if self._buses is None:
+            self._buses = json.loads(BUSES.read_text(encoding="utf-8")) if BUSES.exists() else {}
+        return self._buses or None
+
+    def programadas(self, d: date, paradas: set[str]) -> dict:
+        """(línea, parada, sentido) -> horas programadas del día d en segundos desde su medianoche (hora de Barcelona).
+        Incluye los viajes del día anterior que pasan de medianoche. Sentido como en iBus (1 ida, 2 vuelta)."""
+        hb = self.horario_bus()
+        hoy, ayer = d.strftime("%Y%m%d"), (d - timedelta(days=1)).strftime("%Y%m%d")
+        act = [(hoy in s, ayer in s) for s in map(set, hb["servicios"])]
+        pos = [[(k, _cod_parada(sid)) for k, sid in enumerate(p[6]) if _cod_parada(sid) in paradas] for p in hb["patrones"]]
+        prog = defaultdict(list)
+        for pi, salida, dur, sv in hb["viajes"]:
+            a_hoy, a_ayer = act[sv]
+            if not pos[pi] or not (a_hoy or a_ayer):
+                continue
+            pat = hb["patrones"][pi]
+            linea = hb["lineas"][pat[0]][0]
+            for k, cod in pos[pi]:
+                h = salida + pat[5][k] * dur
+                for activo, desfase in ((a_hoy, 0), (a_ayer, -86400)):
+                    if activo:
+                        prog[(linea, cod, pat[2] + 1)].append(h + desfase)
+        return {k: np.sort(np.array(v, dtype=float)) for k, v in prog.items()}
+
+    def bus_llegadas(self, d: date) -> pa.Table | None:
+        """Una fila por paso de bus visto por iBus (todas sus previsiones juntas), con su hora programada y su retraso."""
+        s0, s1 = _dia_utc(d)
+        t = self.silver("bus", s0 - 3600, s1)
+        if t is None or not t.num_rows or not self.horario_bus():
+            return None
+        filas = [r for r in t.to_pylist() if r["llegada"] and s0 <= r["llegada"].timestamp() < s1]
+        if not filas:
+            return None
+        prog = self.programadas(d, {r["parada"] for r in filas})
+        # en cada captura iBus da los 2-3 próximos buses: la distancia entre uno y el anterior es el intervalo real previsto
+        previo = {(r["ts"], r["parada"], r["linea"], r["sentido"], r["orden"]): r["llegada"].timestamp() for r in filas}
+        # previsiones del mismo bus en la misma parada -> un paso (sin id de bus: llegadas a menos de 8 min, nunca dos de la misma captura)
+        grupos = defaultdict(list)
+        for r in filas:
+            grupos[(r["parada"], r["linea"], r["sentido"], r["id_bus"])].append(r)
+        pasos = []
+        for rs in grupos.values():
+            rs.sort(key=lambda r: r["llegada"])
+            actual = [rs[0]]
+            for r in rs[1:]:
+                if (r["llegada"] - actual[-1]["llegada"]).total_seconds() > 480 or any(x["ts"] == r["ts"] for x in actual):
+                    pasos.append(actual); actual = [r]
+                else:
+                    actual.append(r)
+            pasos.append(actual)
+        m0 = datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp()      # medianoche «de reloj» del día
+        offs: dict[int, int] = {}
+
+        def reloj(s: float) -> float:                                                # segundos UTC -> segundos desde la medianoche local
+            h = int(s) // 3600
+            if h not in offs:
+                offs[h] = int(datetime.fromtimestamp(h * 3600, MADRID).utcoffset().total_seconds())
+            return s + offs[h] - m0
+        out = []
+        for p in pasos:
+            p.sort(key=lambda r: r["ts"])
+            ult, pri = p[-1], p[0]
+            lleg = ult["llegada"].timestamp()
+            lst = next((prog[k] for k in ((c, ult["parada"], ult["sentido"]) for c in (ult["linea"], ult["codi_linia"])) if k in prog), None)
+            retraso = intervalo = prog_s = None
+            if lst is not None and len(lst):
+                x = reloj(lleg)
+                i = int(np.searchsorted(lst, x))
+                j = min((k for k in (i - 1, i) if 0 <= k < len(lst)), key=lambda k: abs(lst[k] - x))
+                if abs(x - lst[j]) <= 20 * 60:
+                    retraso = int(round(x - lst[j])); prog_s = lleg - retraso
+                    vecinos = [abs(lst[k] - lst[j]) for k in (j - 1, j + 1) if 0 <= k < len(lst)]
+                    intervalo = int(round(min(vecinos))) if vecinos else None
+            ant = previo.get((ult["ts"], ult["parada"], ult["linea"], ult["sentido"], ult["orden"] - 1)) if ult["orden"] else None
+            out.append({"intervalo_previsto_s": None if ant is None else int(lleg - ant),
+                        "retraso_claro": None if retraso is None else bool(intervalo is None or abs(retraso) <= intervalo / 4),"parada": ult["parada"], "linea": ult["linea"], "sentido": ult["sentido"], "destino": ult["destino"], "id_bus": ult["id_bus"],
+                        "s": lleg, "llegada": ult["llegada"], "programada": prog_s, "retraso_s": retraso, "intervalo_prog_s": intervalo,
+                        "previsiones": len(p), "anticipacion_s": int(lleg - ult["ts"].timestamp()),
+                        "anticipacion_primera_s": int(pri["llegada"].timestamp() - pri["ts"].timestamp()),
+                        "cambio_prevision_s": int(lleg - pri["llegada"].timestamp())})
+        out.sort(key=lambda r: (r["s"], r["linea"], r["parada"]))
+        s = np.array([r["s"] for r in out], dtype="int64")
+        cub = (s // Q) * Q
+        cols = {"t": pa.array(cub, type=TS), "t_local": _local(cub)}
+        for c, tipo in (("parada", pa.string()), ("linea", pa.string()), ("sentido", pa.int8()), ("destino", pa.string()), ("id_bus", pa.int32())):
+            cols[c] = pa.array([r[c] for r in out], type=tipo)
+        cols["llegada"] = pa.array([r["llegada"] for r in out], type=TS); cols["llegada_local"] = _local(s)
+        cols["programada"] = pa.array([None if r["programada"] is None else int(r["programada"]) for r in out], type=pa.int64()).cast(TS)
+        for c, tipo in (("retraso_s", pa.int32()), ("retraso_claro", pa.bool_()), ("intervalo_prog_s", pa.int32()), ("intervalo_previsto_s", pa.int32()),
+                        ("previsiones", pa.int16()), ("anticipacion_s", pa.int32()),
+                        ("anticipacion_primera_s", pa.int32()), ("cambio_prevision_s", pa.int32())):
+            cols[c] = pa.array([r[c] for r in out], type=tipo)
+        return pa.table(cols)
+
+    @staticmethod
+    def bus_retrasos_15min(llegadas: pa.Table) -> pa.Table | None:
+        """Retraso por línea, sentido y cuarto de hora (solo previsiones hechas a 15 min o menos de la llegada: las más fiables)."""
+        g = defaultdict(list)
+        for r in llegadas.select(["t", "t_local", "linea", "sentido", "parada", "retraso_s", "retraso_claro", "intervalo_prog_s",
+                                  "intervalo_previsto_s", "anticipacion_s"]).to_pylist():
+            if r["retraso_s"] is not None and r["anticipacion_s"] <= 900:
+                g[(r["linea"], r["sentido"], r["t"])].append(r)
+        if not g:
+            return None
+        filas = []
+        for (linea, sentido, t), rs in sorted(g.items(), key=lambda kv: (kv[0][2], kv[0][0], kv[0][1] or 0)):
+            v = np.array([r["retraso_s"] for r in rs], dtype=float)
+            med = lambda c: (lambda x: int(np.median(x)) if x else None)([r[c] for r in rs if r[c] is not None])   # noqa: E731
+            filas.append({"linea": linea, "sentido": sentido, "t": t, "t_local": rs[0]["t_local"], "pasos": len(v),
+                          "paradas": len({r["parada"] for r in rs}), "retraso_mediana_s": int(np.median(v)), "retraso_medio_s": float(v.mean()),
+                          "retraso_p90_s": int(np.percentile(v, 90)), "retraso_max_s": int(v.max()),
+                          "retrasados": int((v > 180).sum()), "adelantados": int((v < -60).sum()),
+                          "claros": sum(bool(r["retraso_claro"]) for r in rs), "intervalo_prog_s": med("intervalo_prog_s"),
+                          "intervalo_previsto_s": med("intervalo_previsto_s")})
+        return pa.Table.from_pylist(filas, schema=pa.schema([("linea", pa.string()), ("sentido", pa.int8()), ("t", TS), ("t_local", T_LOCAL),
+            ("pasos", pa.int16()), ("paradas", pa.int16()), ("retraso_mediana_s", pa.int32()), ("retraso_medio_s", pa.float32()),
+            ("retraso_p90_s", pa.int32()), ("retraso_max_s", pa.int32()), ("retrasados", pa.int16()), ("adelantados", pa.int16()),
+            ("claros", pa.int16()), ("intervalo_prog_s", pa.int32()), ("intervalo_previsto_s", pa.int32())]))
+
     # ---------- tablas de entrenamiento (hace falta el día siguiente para el objetivo a +30 min) ----------
     def _gold(self, tabla: str, d: date) -> pa.Table | None:
         k = self._dia(tabla, d)
@@ -896,6 +1037,15 @@ class Oro:
                         self.hecho.append(f"gold {nom} {d}: {t.num_rows:,} filas"); log(self.hecho[-1])
                 except Exception as e:  # noqa: BLE001
                     self.c.errores.append(f"gold {nom} {d}: {e}"); log("ERROR gold", nom, d, e)
+            try:                                                    # autobuses: pasos con su retraso y, de ahí, la tabla por línea
+                lleg = self.bus_llegadas(d)
+                if lleg is not None and lleg.num_rows:
+                    for nom, t in (("bus_llegadas", lleg), ("bus_retrasos_15min", self.bus_retrasos_15min(lleg))):
+                        if t is not None:
+                            self._subir(t, self._dia(nom, d))
+                            self.hecho.append(f"gold {nom} {d}: {t.num_rows:,} filas"); log(self.hecho[-1])
+            except Exception as e:  # noqa: BLE001
+                self.c.errores.append(f"gold bus {d}: {e}"); log("ERROR gold bus", d, e)
             try:
                 cal_nuevas += self.calidad(d)
             except Exception as e:  # noqa: BLE001
@@ -995,6 +1145,32 @@ CATALOGO = {
                     "clave": "fuente + id + día", "columnas": {"fuente": "Ajuntament o SCT", "id": "texto (Ajuntament) o id DATEX (SCT)", "inicio_visto": "primera captura (UTC)",
                     "fin_visto": "última captura (UTC)", "capturas": "veces vista", "tipo": "causa (obras, accidente, manifestación…) o tipo DATEX", "efecto": "cortado/restricciones o subtipo DATEX",
                     "via": "calle o carretera", "sentido": "sentido", "texto": "texto original o municipio", "lat": "latitud (SCT)", "lon": "longitud (SCT)", "en_barcelona": "dentro de Barcelona y alrededores"}},
+    "bus_llegadas": {"descripcion": "Cada paso de autobús visto por iBus en las paradas de control (unas 470, cada una consultada cada ~40 min), "
+                                    "con su hora programada y su retraso. El retraso es frente a la hora programada más cercana de esa línea en esa parada: "
+                                    "en líneas muy frecuentes (TMB las regula por intervalo, no por horario) solo se puede medir hasta medio intervalo; mira `retraso_claro`.",
+                     "fuente": "TMB iBus (previsión de llegada) + horario GTFS de TMB y AMB (data/gold/barcelona/vivo/buses.json del día de la compactación)",
+                     "clave": "parada + linea + sentido + llegada",
+                     "columnas": {**_T, "parada": "código de parada TMB (ver dim/paradas_bus)", "linea": "línea (V15, H6, 24…)", "sentido": "1 ida · 2 vuelta (iBus)",
+                                  "destino": "destino del trayecto", "id_bus": "número del bus (vacío en ~20 %)", "llegada": "llegada prevista por iBus en su última previsión (UTC)",
+                                  "llegada_local": "lo mismo en hora de Barcelona", "programada": "hora programada usada (UTC)",
+                                  "retraso_s": "llegada − programada en segundos (+ tarde, − adelantado); vacío si no hay horario o pasa de 20 min",
+                                  "retraso_claro": "el retraso es menor que un cuarto del intervalo programado: no se confunde con el bus de antes o el de después",
+                                  "intervalo_prog_s": "segundos entre buses según horario alrededor de esa hora",
+                                  "intervalo_previsto_s": "segundos con el bus anterior de la misma línea según iBus (pelotones si es mucho menor que el programado)",
+                                  "previsiones": "previsiones juntadas en este paso", "anticipacion_s": "segundos entre la última previsión y la llegada",
+                                  "anticipacion_primera_s": "lo mismo para la primera previsión", "cambio_prevision_s": "cuánto cambió la llegada prevista entre la primera y la última"}},
+    "bus_retrasos_15min": {"descripcion": "Retraso de cada línea y sentido por cuarto de hora (de bus_llegadas, solo previsiones a 15 min o menos de la llegada).",
+                           "fuente": "gold/bus_llegadas", "clave": "linea + sentido + t",
+                           "columnas": {"linea": "línea", "sentido": "1 ida · 2 vuelta", **_T, "pasos": "pasos medidos", "paradas": "paradas distintas",
+                                        "retraso_mediana_s": "mediana del retraso (s)", "retraso_medio_s": "media (s)", "retraso_p90_s": "percentil 90 (s)",
+                                        "retraso_max_s": "máximo (s)", "retrasados": "pasos con más de 3 min de retraso", "adelantados": "pasos con más de 1 min de adelanto",
+                                        "claros": "pasos con retraso_claro", "intervalo_prog_s": "mediana del intervalo programado (s)",
+                                        "intervalo_previsto_s": "mediana del intervalo real previsto por iBus (s)"}},
+    "dim/paradas_bus": {"descripcion": "Paradas de bus: nombre, posición y barrio.", "fuente": "GTFS de TMB y AMB + barrios de Open Data BCN", "clave": "parada",
+                        "columnas": {"parada": "código TMB (el de iBus)", "nombre": "nombre", "x": "metros este (coordenadas del visor)", "z": "metros sur",
+                                     "barrio": "barrio", "distrito": "distrito"}},
+    "dim/lineas_bus": {"descripcion": "Líneas de bus con su color y nombre.", "fuente": "GTFS de TMB y AMB-NitBus", "clave": "linea",
+                       "columnas": {"linea": "línea", "color": "color oficial", "nombre": "nombre (extremos)", "nocturna": "NitBus"}},
     "entreno_bicing": {"descripcion": "Tabla de entrenamiento: bicis en cada estación dentro de 30 minutos, con el pasado reciente, la hora, el calendario y el tiempo.",
                        "fuente": "gold/bicing_15min + tiempo_15min + dim/calendario", "clave": "estacion_id + t",
                        "columnas": {"estacion_id": "estación", **_T, "bicis": "bicis ahora", "capacidad": "anclajes", "ocupacion": "bicis / capacidad", "cogidas": "salidas en el cuarto de hora",
