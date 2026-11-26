@@ -1198,7 +1198,7 @@ class Oro:
             cob = min(1.0, len(caps) / esp) if esp else None
             filas.append({"fecha": d, "fuente": fuente, "capturas": int(len(caps)), "esperadas": int(round(esp)), "cobertura": cob,
                           "mayor_hueco_min": round(hueco, 1), "filas": int(t.num_rows) if t is not None else 0,
-                          "alerta": bool(cob is not None and (cob < 0.9 or hueco > max(60, 3 * 1440 / ESPERADAS[fuente]))))})   # hueco: > 3 periodos de la fuente
+                          "alerta": bool(cob is not None and (cob < 0.9 or hueco > max(60, 3 * 1440 / ESPERADAS[fuente])))})   # hueco: > 3 periodos de la fuente
         return filas
 
     # ---------- todo junto ----------
