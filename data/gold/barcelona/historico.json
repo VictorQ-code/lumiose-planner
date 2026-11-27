@@ -1,9 +1,9 @@
 {
- "actualizado": "2026-11-27T11:00:38+00:00",
+ "actualizado": "2026-11-27T15:38:21+00:00",
  "prueba": false,
- "bytes_historico": 9939149,
- "bytes_capturas_sueltas": 191896453,
- "capturas_sueltas": 1518,
+ "bytes_historico": 9941548,
+ "bytes_capturas_sueltas": 268106128,
+ "capturas_sueltas": 2103,
  "fuentes": {
   "bicing": {
    "filas": 2101374,
@@ -50,13 +50,6 @@
  },
  "ultima_ejecucion": {
   "hecho": [
-   "día 2026-11-26 bicing: 1440 capturas -> 780,993 filas (0.61 MB tabla + 1.90 MB crudo)",
-   "día 2026-11-26 bicing_info: 4 capturas -> 2,169 filas (0.03 MB tabla + 0.02 MB crudo)",
-   "día 2026-11-26 trafico: 245 capturas -> 130,340 filas (0.04 MB tabla + 0.05 MB crudo)",
-   "día 2026-11-26 tiempo: 96 capturas -> 96 filas (0.01 MB tabla + 0.00 MB crudo)",
-   "día 2026-11-26 bus: 720 capturas -> 68,257 filas (0.41 MB tabla + 0.62 MB crudo)",
-   "día 2026-11-26 incidencias_bcn: 245 capturas -> 1,603 filas (0.01 MB tabla + 0.00 MB crudo)",
-   "día 2026-11-26 incidencias_sct: 288 capturas -> 66,598 filas (0.03 MB tabla + 0.11 MB crudo)",
    "referencias: estaciones_bicing (543), tramos_trafico (527), paradas_bus (4284), lineas_bus (129), calendario (730)",
    "gold bicing_15min 2026-11-24: 36,398 filas",
    "gold trafico_15min 2026-11-24: 30,856 filas",
