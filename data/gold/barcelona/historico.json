@@ -1,62 +1,63 @@
 {
- "actualizado": "2026-11-27T15:38:21+00:00",
+ "actualizado": "2026-11-28T10:35:32+00:00",
  "prueba": false,
- "bytes_historico": 9941548,
- "bytes_capturas_sueltas": 268106128,
- "capturas_sueltas": 2103,
+ "bytes_historico": 13823407,
+ "bytes_capturas_sueltas": 147710920,
+ "capturas_sueltas": 1479,
  "fuentes": {
   "bicing": {
-   "filas": 2101374,
-   "bytes": 1596475,
+   "filas": 2885722,
+   "bytes": 2215811,
    "desde": "2026-11-24T06:28:05+00:00",
-   "hasta": "2026-11-26T22:59:05+00:00"
+   "hasta": "2026-11-27T22:59:05+00:00"
   },
   "bicing_info": {
-   "filas": 5425,
-   "bytes": 96227,
+   "filas": 7603,
+   "bytes": 129131,
    "desde": "2026-11-24T12:00:05+00:00",
-   "hasta": "2026-11-26T18:00:05+00:00"
+   "hasta": "2026-11-27T18:00:05+00:00"
   },
   "trafico": {
-   "filas": 323456,
-   "bytes": 111800,
+   "filas": 448476,
+   "bytes": 152494,
    "desde": "2026-11-24T07:00:05+00:00",
-   "hasta": "2026-11-26T22:57:05+00:00"
+   "hasta": "2026-11-27T22:57:05+00:00"
   },
   "tiempo": {
-   "filas": 257,
-   "bytes": 15648,
+   "filas": 353,
+   "bytes": 20919,
    "desde": "2026-11-24T06:30:05+00:00",
-   "hasta": "2026-11-26T22:45:05+00:00"
+   "hasta": "2026-11-27T22:45:05+00:00"
   },
   "bus": {
-   "filas": 164297,
-   "bytes": 1004835,
+   "filas": 233506,
+   "bytes": 1418443,
    "desde": "2026-11-24T13:14:05+00:00",
-   "hasta": "2026-11-26T22:58:05+00:00"
+   "hasta": "2026-11-27T22:58:05+00:00"
   },
   "incidencias_bcn": {
-   "filas": 3176,
-   "bytes": 14017,
+   "filas": 4349,
+   "bytes": 18660,
    "desde": "2026-11-24T20:34:05+00:00",
-   "hasta": "2026-11-26T22:57:05+00:00"
+   "hasta": "2026-11-27T22:57:05+00:00"
   },
   "incidencias_sct": {
-   "filas": 139102,
-   "bytes": 73404,
+   "filas": 204958,
+   "bytes": 103498,
    "desde": "2026-11-24T20:33:05+00:00",
-   "hasta": "2026-11-26T22:55:05+00:00"
+   "hasta": "2026-11-27T22:55:05+00:00"
   }
  },
  "ultima_ejecucion": {
   "hecho": [
-   "referencias: estaciones_bicing (543), tramos_trafico (527), paradas_bus (4284), lineas_bus (129), calendario (730)",
-   "gold bicing_15min 2026-11-24: 36,398 filas",
-   "gold trafico_15min 2026-11-24: 30,856 filas",
-   "gold tiempo_15min 2026-11-24: 96 filas",
-   "gold incidencias 2026-11-24: 228 filas",
-   "gold bus_llegadas 2026-11-24: 29,590 filas",
-   "gold bus_retrasos_15min 2026-11-24: 5,168 filas",
+   "día 2026-11-27 bicing: 1440 capturas -> 784,348 filas (0.62 MB tabla + 1.92 MB crudo)",
+   "día 2026-11-27 bicing_info: 4 capturas -> 2,178 filas (0.03 MB tabla + 0.02 MB crudo)",
+   "día 2026-11-27 trafico: 235 capturas -> 125,020 filas (0.04 MB tabla + 0.05 MB crudo)",
+   "día 2026-11-27 tiempo: 96 capturas -> 96 filas (0.01 MB tabla + 0.00 MB crudo)",
+   "día 2026-11-27 bus: 720 capturas -> 69,209 filas (0.41 MB tabla + 0.63 MB crudo)",
+   "día 2026-11-27 incidencias_bcn: 235 capturas -> 1,173 filas (0.00 MB tabla + 0.00 MB crudo)",
+   "día 2026-11-27 incidencias_sct: 288 capturas -> 65,856 filas (0.03 MB tabla + 0.11 MB crudo)",
+   "referencias: estaciones_bicing (545), tramos_trafico (527), paradas_bus (4284), lineas_bus (129), calendario (730)",
    "gold bicing_15min 2026-11-25: 52,102 filas",
    "gold trafico_15min 2026-11-25: 50,008 filas",
    "gold tiempo_15min 2026-11-25: 96 filas",
@@ -69,24 +70,28 @@
    "gold incidencias 2026-11-26: 418 filas",
    "gold bus_llegadas 2026-11-26: 64,730 filas",
    "gold bus_retrasos_15min 2026-11-26: 10,167 filas",
+   "gold bicing_15min 2026-11-27: 52,291 filas",
+   "gold trafico_15min 2026-11-27: 50,008 filas",
+   "gold tiempo_15min 2026-11-27: 96 filas",
+   "gold incidencias 2026-11-27: 407 filas",
+   "gold bus_llegadas 2026-11-27: 65,923 filas",
+   "gold bus_retrasos_15min 2026-11-27: 10,244 filas",
    "gold entreno_bicing 2026-11-24: 36,396 filas",
    "gold entreno_trafico 2026-11-24: 27,664 filas",
    "gold entreno_bus 2026-11-24: 15,050 filas",
    "gold entreno_bicing 2026-11-25: 52,098 filas",
    "gold entreno_trafico 2026-11-25: 48,944 filas",
    "gold entreno_bus 2026-11-25: 27,974 filas",
+   "gold entreno_bicing 2026-11-26: 52,065 filas",
+   "gold entreno_trafico 2026-11-26: 48,944 filas",
    "gold entreno_bus 2026-11-26: 28,643 filas",
-   "AVISO calidad 2026-11-24 bicing: 992/1440 capturas, mayor hueco 448.1 min",
-   "AVISO calidad 2026-11-24 bicing_info: 2/4 capturas, mayor hueco 780.1 min",
-   "AVISO calidad 2026-11-24 trafico: 119/288 capturas, mayor hueco 480.1 min",
-   "AVISO calidad 2026-11-24 tiempo: 65/96 capturas, mayor hueco 450.1 min",
-   "AVISO calidad 2026-11-24 bus: 293/720 capturas, mayor hueco 854.1 min",
-   "AVISO calidad 2026-11-24 incidencias_bcn: 26/288 capturas, mayor hueco 1294.1 min",
-   "AVISO calidad 2026-11-24 incidencias_sct: 30/288 capturas, mayor hueco 1293.1 min",
+   "gold entreno_bus 2026-11-27: 30,357 filas",
    "AVISO calidad 2026-11-25 trafico: 244/288 capturas, mayor hueco 18.0 min",
    "AVISO calidad 2026-11-25 incidencias_bcn: 246/288 capturas, mayor hueco 18.0 min",
    "AVISO calidad 2026-11-26 trafico: 245/288 capturas, mayor hueco 17.0 min",
    "AVISO calidad 2026-11-26 incidencias_bcn: 245/288 capturas, mayor hueco 17.0 min",
+   "AVISO calidad 2026-11-27 trafico: 235/288 capturas, mayor hueco 17.0 min",
+   "AVISO calidad 2026-11-27 incidencias_bcn: 235/288 capturas, mayor hueco 17.0 min",
    "catálogo: 14 tablas"
   ],
   "errores": []
